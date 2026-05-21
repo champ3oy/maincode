@@ -35,7 +35,7 @@ import {
 import { toast } from "sonner";
 import { listen } from "@tauri-apps/api/event";
 import type { CommentStatus } from "@/types/comments";
-import { perfLog, perfLogJson, type ExpandAllSession } from "@/lib/perf";
+import { perfLog } from "@/lib/perf";
 
 interface CommentStatusPayload {
   review_id: string;
@@ -53,15 +53,12 @@ function App() {
   const comments = useComments();
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("split");
   const [allExpanded, setAllExpanded] = useState(false);
-  const [expandAllSession, setExpandAllSession] =
-    useState<ExpandAllSession | null>(null);
   const [scrollToPath, setScrollToPath] = useState<string | null>(null);
   const [scrollNonce, setScrollNonce] = useState(0);
   const [submittingReview, setSubmittingReview] = useState(false);
   const [optimisticStage, setOptimisticStage] = useState<Map<string, boolean>>(
     new Map(),
   );
-  const expandSessionIdRef = useRef(0);
   const restoreOpenStartedRef = useRef(false);
   const [branch, setBranch] = useState<string | null>(null);
 
@@ -250,7 +247,6 @@ function App() {
   useEffect(() => {
     if (!workdir) {
       autoExpandedRepoRef.current = null;
-      setExpandAllSession(null);
       return;
     }
     if (!status) return;
@@ -263,51 +259,18 @@ function App() {
       shouldExpand,
       limit: AUTO_EXPAND_FILE_LIMIT,
     });
-    setExpandAllSession(null);
     setAllExpanded(shouldExpand);
   }, [allFiles.length, status, workdir]);
 
   const handleToggleExpandAll = useCallback(() => {
-    if (allExpanded) {
-      perfLogJson("ExpandAll", "collapseClick", {
-        activeSessionId: expandAllSession?.id ?? null,
-        totalFiles: allFiles.length,
-      });
-      setExpandAllSession(null);
-      setAllExpanded(false);
-      return;
-    }
-    const nextSession: ExpandAllSession = {
-      id: ++expandSessionIdRef.current,
-      startedAt: performance.now(),
-      requestedFileCount: allFiles.length,
-    };
-    perfLogJson("ExpandAll", "click", {
-      sessionId: nextSession.id,
-      totalFiles: allFiles.length,
-      loadedDiffs: diffs.size,
-      loading,
-      diffStyle,
-    });
-    setExpandAllSession(nextSession);
-    setAllExpanded(true);
-  }, [
-    allExpanded,
-    allFiles.length,
-    diffStyle,
-    diffs.size,
-    expandAllSession?.id,
-    loading,
-  ]);
+    setAllExpanded((v) => !v);
+  }, []);
 
   const handleSelectFile = useCallback((path: string) => {
     setScrollToPath(path);
     setScrollNonce((n) => n + 1);
   }, []);
 
-  const handleScrollComplete = useCallback(() => {
-    setScrollToPath(null);
-  }, []);
 
   const stagedPathsRef = useRef(stagedPaths);
   stagedPathsRef.current = stagedPaths;
@@ -528,10 +491,8 @@ function App() {
             onDiffStyleChange={setDiffStyle}
             allExpanded={allExpanded}
             onToggleExpandAll={handleToggleExpandAll}
-            expandAllSession={expandAllSession}
             scrollToPath={scrollToPath}
             scrollNonce={scrollNonce}
-            onScrollComplete={handleScrollComplete}
             annotationsByFile={comments.annotationsByFile}
             hasOpenForm={comments.hasOpenForm}
             totalCommentCount={comments.totalCommentCount}
