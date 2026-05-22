@@ -1,6 +1,6 @@
 cask "cub" do
   version "0.2.1"
-  sha256 "3ec8dd932395d2d15d31171b9383a44335de78717dc3d3d57f130e97ca08fc49"
+  sha256 "726df73466814a6c96f8698a31efb74c63258318cba69fae3608f5dee896c241"
 
   url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_universal.dmg"
   name "Cub"
