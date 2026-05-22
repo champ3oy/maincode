@@ -1,0 +1,93 @@
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0). Created if missing."
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: macOS universal
+    runs-on: macos-14
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: bun install --frozen-lockfile
+
+      - name: Build universal .app + .dmg
+        run: bun run tauri build --target universal-apple-darwin --bundles dmg,app
+
+      - name: Stage artifacts
+        id: artifacts
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR=src-tauri/target/universal-apple-darwin/release/bundle
+          VERSION="${{ steps.tag.outputs.version }}"
+          DMG_SRC="$BUNDLE_DIR/dmg/Cub_${VERSION}_universal.dmg"
+          DMG_DST="Cub_${VERSION}_universal.dmg"
+          cp "$DMG_SRC" "$DMG_DST"
+          SHA=$(shasum -a 256 "$DMG_DST" | awk '{print $1}')
+          echo "dmg=$DMG_DST" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "::notice title=DMG SHA256::$SHA  $DMG_DST"
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Cub ${{ steps.tag.outputs.tag }}
+          draft: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.artifacts.outputs.dmg }}
+          body: |
+            ## Install with Homebrew
+
+            ```
+            brew install --cask ephraimduncan/cub/cub
+            ```
+
+            ## Manual install
+
+            Download `Cub_${{ steps.tag.outputs.version }}_universal.dmg`, open it, and drag **Cub.app** to Applications.
+
+            DMG SHA256:
+            ```
+            ${{ steps.artifacts.outputs.sha256 }}
+            ```
+
+      - name: Print cask snippet
+        run: |
+          cat <<EOF
+          --- Cask formula update ---
+          version "${{ steps.tag.outputs.version }}"
+          sha256 "${{ steps.artifacts.outputs.sha256 }}"
+          EOF

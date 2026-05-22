@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
@@ -104,7 +104,7 @@ async function removeServerInfoIfOwned(pid) {
 
 function initDatabase() {
   const db = new Database(DB_PATH);
-  db.pragma("journal_mode = WAL");
+  db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     CREATE TABLE IF NOT EXISTS reviews (
       id          TEXT PRIMARY KEY,

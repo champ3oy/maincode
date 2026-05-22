@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::Manager;
 
-pub use review_bridge::sidecar_script_path;
+pub use review_bridge::{find_bun, sidecar_script_path};
 
 static LAUNCH_PATH: OnceLock<PathBuf> = OnceLock::new();
 

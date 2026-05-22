@@ -32,17 +32,25 @@ fn run_mcp_mode() -> ExitCode {
         }
     };
 
-    let spawn = |runtime: &str| Command::new(runtime).arg(&script).arg("mcp").status();
+    let bun = match cub_lib::find_bun() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "[cub] bun not found. install via `brew install bun` or https://bun.sh"
+            );
+            return ExitCode::from(1);
+        }
+    };
 
-    let status = match spawn("node") {
+    let status = match Command::new(&bun).arg(&script).arg("mcp").status() {
         Ok(s) => s,
-        Err(node_err) => match spawn("bun") {
-            Ok(s) => s,
-            Err(bun_err) => {
-                eprintln!("[cub] failed to spawn MCP sidecar: node={node_err}, bun={bun_err}");
-                return ExitCode::from(1);
-            }
-        },
+        Err(err) => {
+            eprintln!(
+                "[cub] failed to spawn MCP sidecar with {}: {err}",
+                bun.display()
+            );
+            return ExitCode::from(1);
+        }
     };
 
     ExitCode::from(status.code().unwrap_or(1).clamp(0, 255) as u8)

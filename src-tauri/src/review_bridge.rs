@@ -90,19 +90,66 @@ fn workspace_root() -> Result<PathBuf, String> {
 
 pub fn sidecar_script_path() -> Result<PathBuf, String> {
     let root = workspace_root()?;
-    let path = root.join("sidecar").join("cub-mcp.js");
-    if path.exists() {
-        return Ok(path);
-    }
-    let flat = root.join("cub-mcp.js");
-    if flat.exists() {
-        return Ok(flat);
+    // Prefer the bundled, dependency-inlined sidecar (shipped in release
+    // builds). Fall back to the raw script (works in `bun run tauri dev`
+    // because the repo's node_modules is on the import-resolution path).
+    let candidates = [
+        // macOS .app bundle: Contents/Resources/_up_/sidecar/<file>
+        root.join("../Resources/_up_/sidecar/cub-mcp.bundled.js"),
+        root.join("../Resources/sidecar/cub-mcp.bundled.js"),
+        root.join("sidecar").join("cub-mcp.bundled.js"),
+        root.join("cub-mcp.bundled.js"),
+        // Dev / unbundled fallback.
+        root.join("sidecar").join("cub-mcp.js"),
+        root.join("cub-mcp.js"),
+    ];
+    for c in &candidates {
+        if c.exists() {
+            return Ok(c.clone());
+        }
     }
     Err(format!(
-        "missing sidecar script (checked {} and {})",
-        path.display(),
-        flat.display()
+        "missing sidecar script (checked {})",
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     ))
+}
+
+/// Resolve a `bun` executable. The shipped sidecar is a single bun-bundled
+/// script that depends on `bun:sqlite`, so a working bun runtime is required.
+///
+/// When `Cub.app` is launched from Finder, the inherited PATH is the minimal
+/// `/usr/bin:/bin:/usr/sbin:/sbin` set — Homebrew and the bun installer write
+/// to locations outside that set, so a plain `Command::new("bun")` cannot find
+/// them. Walk the common install paths first, then fall back to PATH.
+pub fn find_bun() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/bin/bun"),
+        PathBuf::from("/usr/local/bin/bun"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".bun/bin/bun"));
+        candidates.push(home.join(".local/bin/bun"));
+    }
+    for c in &candidates {
+        if c.is_file() {
+            return Some(c.clone());
+        }
+    }
+    // PATH-based lookup as a last resort (covers atypical installs).
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let p = dir.join("bun");
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
 }
 
 fn read_server_info() -> Result<Option<ServerInfo>, String> {
@@ -139,24 +186,18 @@ fn server_is_healthy(info: &ServerInfo) -> bool {
 
 fn spawn_server_process(script_path: &Path) -> Result<Child, String> {
     let root = workspace_root()?;
-
-    let spawn_with = |runtime: &str| {
-        Command::new(runtime)
-            .arg(script_path)
-            .arg("server")
-            .current_dir(&root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-    };
-
-    match spawn_with("node") {
-        Ok(child) => Ok(child),
-        Err(node_err) => spawn_with("bun").map_err(|bun_err| {
-            format!("failed to spawn review server with node ({node_err}) or bun ({bun_err})")
-        }),
-    }
+    let bun = find_bun().ok_or_else(|| {
+        "bun not found. install via `brew install bun` or https://bun.sh".to_string()
+    })?;
+    Command::new(&bun)
+        .arg(script_path)
+        .arg("server")
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|err| format!("failed to spawn review server with {}: {err}", bun.display()))
 }
 
 fn wait_for_server_ready(child: &mut Child) -> Result<ServerInfo, String> {

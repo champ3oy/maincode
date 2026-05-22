@@ -80,14 +80,24 @@ Tools exposed:
 
 ## Install
 
-### Prerequisites
+### Homebrew (macOS)
 
-- macOS (Linux / Windows builds work but aren't release-tested)
-- [Bun](https://bun.sh) (for the frontend dev server and MCP sidecar)
-- [Rust toolchain](https://rustup.rs)
-- The Tauri v2 [system dependencies](https://v2.tauri.app/start/prerequisites/)
+```bash
+brew install --cask ephraimduncan/cub/cub
+```
+
+This pulls the latest universal `.dmg` from
+[GitHub releases](https://github.com/ephraimduncan/cub.dev/releases) and drops
+`Cub.app` into `/Applications` plus a `cub` CLI symlink in your Homebrew
+`bin/`. Upgrades land via `brew upgrade --cask cub`.
+
+The shipped binary is ad-hoc signed (no Developer ID / notarization). The cask
+strips the macOS quarantine attribute so first launch isn't blocked.
 
 ### From source
+
+Requires [Bun](https://bun.sh), the [Rust toolchain](https://rustup.rs), and
+the Tauri v2 [system dependencies](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 git clone https://github.com/ephraimduncan/cub.dev
