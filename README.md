@@ -14,6 +14,31 @@ Cub is a desktop git client. You stage, commit, switch branches, and discard cha
 
 The thing it does that other clients don't: you can review your AI-generated changes inline — leave comments on specific lines, classify them as change-requests, questions, or nits — and an MCP server hands those comments back to the agent so it can address them. No copy-pasting line numbers into chat.
 
+## Install
+
+**macOS** (Apple Silicon or Intel):
+
+```bash
+brew install --cask ephraimduncan/cub/cub
+```
+
+**Linux** — grab the matching artifact from [the latest release](https://github.com/ephraimduncan/cub.dev/releases/latest):
+
+- `Cub_<version>_amd64.deb` for Debian / Ubuntu
+- `Cub-<version>-1.x86_64.rpm` for Fedora / RHEL
+- `Cub_<version>_amd64.AppImage` for everything else
+
+Cub needs [Bun](https://bun.sh) at runtime for the MCP sidecar.
+
+## CLI
+
+```bash
+cub                # launch with the folder picker
+cub .              # launch pointed at the current repo
+cub /path/to/repo  # launch pointed at a specific repo
+cub --mcp          # MCP-only mode, no GUI (for agent configs)
+```
+
 ## The loop
 
 ```
@@ -78,57 +103,16 @@ Tools exposed:
 
 > **Note for agents handling `action_type=question`:** answer in the `summary` field of `resolve_comment`. Don't edit code unless the comment is a `change-request`.
 
-## Install
+## Building from source
 
-### Homebrew (macOS)
-
-```bash
-brew install --cask ephraimduncan/cub/cub
-```
-
-The cask picks the right architecture-specific `.dmg` from
-[GitHub releases](https://github.com/ephraimduncan/cub.dev/releases)
-(`Cub_<version>_aarch64.dmg` on Apple Silicon, `Cub_<version>_x64.dmg`
-on Intel), drops `Cub.app` into `/Applications`, and adds a `cub` CLI
-symlink in your Homebrew `bin/`. Upgrades land via
-`brew upgrade --cask cub`.
-
-The shipped binary is ad-hoc signed (no Developer ID / notarization).
-The cask strips the macOS quarantine attribute so first launch isn't
-blocked.
-
-### Linux
-
-No Homebrew cask — Cask is macOS-only. Grab a build from
-[GitHub releases](https://github.com/ephraimduncan/cub.dev/releases):
-
-- `.deb` for Debian/Ubuntu (`sudo apt install ./Cub_<version>_amd64.deb`)
-- `.AppImage` for any distro (`chmod +x Cub_<version>_amd64.AppImage && ./Cub_<version>_amd64.AppImage`)
-- `.rpm` for Fedora/RHEL (`sudo dnf install ./Cub-<version>-1.x86_64.rpm`)
-
-Bun is still required for the MCP sidecar — install via
-`curl -fsSL https://bun.sh/install | bash` or your package manager.
-
-### From source
-
-Requires [Bun](https://bun.sh), the [Rust toolchain](https://rustup.rs), and
-the Tauri v2 [system dependencies](https://v2.tauri.app/start/prerequisites/).
+Requires [Bun](https://bun.sh), the [Rust toolchain](https://rustup.rs), and the Tauri v2 [system dependencies](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 git clone https://github.com/ephraimduncan/cub.dev
 cd cub.dev
 bun install
-bun run tauri dev          # development build with hot reload
+bun run tauri dev          # hot-reloading dev build
 bun run tauri build        # production binary in src-tauri/target/release/bundle
-```
-
-### CLI
-
-```bash
-cub                # launch with the folder picker
-cub .              # launch pointed at the current repo
-cub /path/to/repo  # launch pointed at a specific repo
-cub --mcp          # MCP-only mode, no GUI (for agent configs)
 ```
 
 ## License
