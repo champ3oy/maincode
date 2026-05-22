@@ -15,7 +15,7 @@ import { CloneDialog } from "@/components/onboarding/clone-dialog";
 import { CreateDialog } from "@/components/onboarding/create-dialog";
 
 interface OnboardingProps {
-  onOpened: (workdir: string) => void | Promise<void>;
+  onOpened: (path: string) => Promise<string>;
 }
 
 function basename(path: string): string {
@@ -31,7 +31,7 @@ function parentPath(path: string): string {
 }
 
 export function Onboarding({ onOpened }: OnboardingProps) {
-  const { recent, addRecent, removeRecent } = useRecentRepos();
+  const { recent, removeRecent } = useRecentRepos();
   const recentPaths = useMemo(() => recent.map((r) => r.path), [recent]);
   const branchByPath = useRecentBranches(recentPaths);
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -45,7 +45,6 @@ export function Onboarding({ onOpened }: OnboardingProps) {
         () => Promise.resolve(onOpened(path)),
         { path },
       );
-      addRecent(path);
     } catch (e) {
       toast.error(`Failed to open: ${e}`);
     }

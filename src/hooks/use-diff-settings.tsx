@@ -11,6 +11,7 @@ export type FontChoice = "app-mono" | "system-mono" | "courier";
 export interface DiffSettings {
   font: FontChoice;
   fontSize: number;
+  wrap: boolean;
 }
 
 export const FONT_LABELS: Record<FontChoice, string> = {
@@ -31,6 +32,7 @@ export const FONT_SIZE_MAX = 22;
 export const DEFAULT_DIFF_SETTINGS: DiffSettings = {
   font: "app-mono",
   fontSize: 13,
+  wrap: false,
 };
 
 const STORAGE_KEY = "cub:diff-settings";
@@ -55,7 +57,11 @@ function readStorage(): DiffSettings {
       rawSize <= FONT_SIZE_MAX
         ? Math.round(rawSize)
         : DEFAULT_DIFF_SETTINGS.fontSize;
-    return { font, fontSize };
+    const wrap =
+      typeof parsed?.wrap === "boolean"
+        ? parsed.wrap
+        : DEFAULT_DIFF_SETTINGS.wrap;
+    return { font, fontSize, wrap };
   } catch {
     return DEFAULT_DIFF_SETTINGS;
   }
@@ -81,6 +87,7 @@ interface DiffSettingsContextValue {
   settings: DiffSettings;
   setFont: (font: FontChoice) => void;
   setFontSize: (size: number) => void;
+  setWrap: (wrap: boolean) => void;
 }
 
 const DiffSettingsContext = createContext<DiffSettingsContextValue | null>(
@@ -112,8 +119,19 @@ export function DiffSettingsProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setWrap = useCallback((wrap: boolean) => {
+    setSettings((prev) => {
+      if (prev.wrap === wrap) return prev;
+      const next = { ...prev, wrap };
+      writeStorage(next);
+      return next;
+    });
+  }, []);
+
   return (
-    <DiffSettingsContext.Provider value={{ settings, setFont, setFontSize }}>
+    <DiffSettingsContext.Provider
+      value={{ settings, setFont, setFontSize, setWrap }}
+    >
       {children}
     </DiffSettingsContext.Provider>
   );

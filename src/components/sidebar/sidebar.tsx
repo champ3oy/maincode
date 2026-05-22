@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useEffect, useMemo, useRef, type CSSProperties } from "react";
 import {
   FileTree,
   useFileTree,
@@ -102,7 +95,7 @@ export function Sidebar({
         </p>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden scrollbar-hide">
+      <div className="flex min-h-0 flex-1 flex-col">
         {!hasChanges && (
           <p className="px-3 py-4 text-xs text-muted-foreground">No changes</p>
         )}
@@ -219,54 +212,7 @@ function Section({
     onSelectFile(path);
   }, [selectedPaths, model, onSelectFile]);
 
-  // Size each section to its rendered tree height so the outer sidebar owns the
-  // single scroll (VSCode source-control style) instead of giving each tree its
-  // own viewport.
   const treeWrapperRef = useRef<HTMLDivElement>(null);
-  const itemHeight = model.getItemHeight();
-  const [treeHeight, setTreeHeight] = useState(() => files.length * itemHeight);
-
-  useLayoutEffect(() => {
-    const wrapper = treeWrapperRef.current;
-    if (wrapper == null) return;
-    let rafId = 0;
-    let mutationObserver: MutationObserver | null = null;
-    let cancelled = false;
-    const attach = () => {
-      if (cancelled) return;
-      const host = wrapper.querySelector(
-        "file-tree-container",
-      ) as HTMLElement | null;
-      const list = host?.shadowRoot?.querySelector<HTMLElement>(
-        '[data-file-tree-virtualized-list="true"]',
-      );
-      if (list == null) {
-        rafId = requestAnimationFrame(attach);
-        return;
-      }
-      // The tree sets `style.height = ${totalScrollableHeight}px` on the list
-      // whenever rows are added, removed, collapsed, or expanded. Observing the
-      // rendered box (ResizeObserver) misses collapses because the list's
-      // `min-height: 100%` pins it to the (stale) wrapper height, so we watch
-      // the inline style attribute instead.
-      const update = () => {
-        const h = parseFloat(list.style.height);
-        if (Number.isFinite(h) && h > 0) setTreeHeight(Math.ceil(h));
-      };
-      update();
-      mutationObserver = new MutationObserver(update);
-      mutationObserver.observe(list, {
-        attributes: true,
-        attributeFilter: ["style"],
-      });
-    };
-    attach();
-    return () => {
-      cancelled = true;
-      if (rafId) cancelAnimationFrame(rafId);
-      mutationObserver?.disconnect();
-    };
-  }, [model]);
 
   // Catch every file-row click (including re-clicks of the already-selected
   // row). `useFileTreeSelection` is memoized by array equality, so clicking
@@ -290,8 +236,8 @@ function Section({
   }, [onSelectFile]);
 
   return (
-    <div className="flex shrink-0 flex-col">
-      <div className="flex items-center justify-between px-2 py-1">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between px-2 py-1">
         <span className="text-xs font-medium text-muted-foreground">
           {label} <span className="text-[10px]">({files.length})</span>
         </span>
@@ -304,11 +250,7 @@ function Section({
           {actionLabel}
         </Button>
       </div>
-      <div
-        ref={treeWrapperRef}
-        className="shrink-0"
-        style={{ height: treeHeight }}
-      >
+      <div ref={treeWrapperRef} className="min-h-0 flex-1">
         <FileTree
           model={model}
           style={treeStyle}

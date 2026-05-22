@@ -1,25 +1,45 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import type {
-  AnnotationSide,
-  DiffLineAnnotation,
-  FileDiffMetadata,
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTheme } from "next-themes";
+import {
+  CodeView,
+  type CodeViewHandle,
+  useWorkerPool,
+} from "@pierre/diffs/react";
+import {
+  DEFAULT_THEMES,
+  parseDiffFromFile,
+  type AnnotationSide,
+  type CodeViewDiffItem,
+  type CodeViewFileItem,
+  type CodeViewItem,
+  type CodeViewOptions,
+  type DiffLineAnnotation,
+  type FileDiffMetadata,
+  type SelectedLineRange,
 } from "@pierre/diffs";
-import { parseDiffFromFile } from "@pierre/diffs";
-import { useWorkerPool } from "@pierre/diffs/react";
-import type { WorkerStats } from "@pierre/diffs/worker";
+
 import { DiffToolbar } from "./diff-toolbar";
-import { DiffCard, type DiffCardHandle } from "./diff-card";
+import { getAnnotationTarget } from "./annotation-target";
+import { CommentForm } from "@/components/comments/comment-form";
+import { CommentBubble } from "@/components/comments/comment-bubble";
+import { cn } from "@/lib/utils";
+import { IconChevronDown } from "@tabler/icons-react";
+import { perfLog } from "@/lib/perf";
+import {
+  FILE_STATUS,
+  DIFF_ADDITION_COLOR,
+  DIFF_DELETION_COLOR,
+} from "@/lib/status";
+import {
+  resolveFontFamily,
+  resolveLineHeight,
+  useDiffSettings,
+} from "@/hooks/use-diff-settings";
 import type { ChangeKind, FileEntry } from "@/lib/tauri";
 import type { FileDiffContents } from "@/hooks/use-diffs";
 import type { ActionType, CommentMetadata } from "@/types/comments";
-import {
-  createPerfAggregator,
-  perfLog,
-  perfLogJson,
-  summarizePerfEntries,
-  type ExpandAllCardMetric,
-  type ExpandAllSession,
-} from "@/lib/perf";
+
+type Item = CodeViewItem<CommentMetadata>;
 
 interface DiffPanelProps {
   files: FileEntry[];
@@ -29,10 +49,8 @@ interface DiffPanelProps {
   onDiffStyleChange: (style: "unified" | "split") => void;
   allExpanded: boolean;
   onToggleExpandAll: () => void;
-  expandAllSession: ExpandAllSession | null;
   scrollToPath: string | null;
   scrollNonce: number;
-  onScrollComplete: () => void;
   annotationsByFile: Map<string, DiffLineAnnotation<CommentMetadata>[]>;
   hasOpenForm: boolean;
   totalCommentCount: number;
@@ -69,93 +87,52 @@ interface DiffPanelProps {
 
 const EMPTY_ANNOTATIONS: DiffLineAnnotation<CommentMetadata>[] = [];
 
-type WorkerStatsSnapshot = Pick<
-  WorkerStats,
-  | "managerState"
-  | "workersFailed"
-  | "totalWorkers"
-  | "busyWorkers"
-  | "queuedTasks"
-  | "pendingTasks"
-  | "fileCacheSize"
-  | "diffCacheSize"
->;
-
-interface ExpandAllSessionMetrics {
-  id: number;
-  startedAt: number;
-  expectedCount: number;
-  textCount: number;
-  binaryCount: number;
-  propSync: Map<string, number>;
-  contentMount: Map<string, number>;
-  renderCommit: Map<string, number>;
-  workerStart: WorkerStatsSnapshot | null;
-  workerPeak: WorkerStatsSnapshot | null;
-  frameGaps: number[];
-  lastFrameAt: number;
-  longTasks: Array<{ startMs: number; durationMs: number }>;
-  rafId: number | null;
-  timeoutId: number | null;
-  observer: PerformanceObserver | null;
-  unsubscribeWorker: (() => void) | null;
-  finalized: boolean;
+function getBinaryDiffMessage(
+  kind: ChangeKind,
+  oldBinary: boolean,
+  newBinary: boolean,
+): string {
+  if (kind === "added") return "Binary file added. Text diff unavailable.";
+  if (kind === "deleted") return "Binary file deleted. Text diff unavailable.";
+  if (!oldBinary && newBinary) {
+    return "File now contains binary data. Text diff unavailable.";
+  }
+  if (oldBinary && !newBinary) {
+    return "Previous version is binary. Text diff unavailable.";
+  }
+  return "Binary file changed. Text diff unavailable.";
 }
 
-function getWorkerStatsSnapshot(
-  workerPool: ReturnType<typeof useWorkerPool>,
-): WorkerStatsSnapshot | null {
-  if (!workerPool) return null;
-  const stats = workerPool.getStats();
-  return {
-    managerState: stats.managerState,
-    workersFailed: stats.workersFailed,
-    totalWorkers: stats.totalWorkers,
-    busyWorkers: stats.busyWorkers,
-    queuedTasks: stats.queuedTasks,
-    pendingTasks: stats.pendingTasks,
-    fileCacheSize: stats.fileCacheSize,
-    diffCacheSize: stats.diffCacheSize,
-  };
-}
-
-function mergeWorkerStatsPeak(
-  peak: WorkerStatsSnapshot | null,
-  next: WorkerStatsSnapshot | null,
-): WorkerStatsSnapshot | null {
-  if (!next) return peak;
-  if (!peak) return next;
-  return {
-    managerState: next.managerState,
-    workersFailed: peak.workersFailed || next.workersFailed,
-    totalWorkers: Math.max(peak.totalWorkers, next.totalWorkers),
-    busyWorkers: Math.max(peak.busyWorkers, next.busyWorkers),
-    queuedTasks: Math.max(peak.queuedTasks, next.queuedTasks),
-    pendingTasks: Math.max(peak.pendingTasks, next.pendingTasks),
-    fileCacheSize: Math.max(peak.fileCacheSize, next.fileCacheSize),
-    diffCacheSize: Math.max(peak.diffCacheSize, next.diffCacheSize),
-  };
-}
-
-type ParsedFile =
-  | {
-      contentKind: "text";
-      filePath: string;
-      fileDiff: FileDiffMetadata;
-      additions: number;
-      deletions: number;
-      kind: ChangeKind;
-      totalLines: number;
+// Gate CodeView mounting on workers having finished theme + language setup.
+// Without this, items briefly render unhighlighted and the parent background
+// shows through during fast scroll repaints (black flashes on dark theme).
+// `workersFailed` is treated as terminal: managerState stays at "waiting" when
+// initialization rejects, so without this branch the UI would be stuck on the
+// "Initializing…" placeholder forever. Render unhighlighted instead.
+// Mirrors pierre's diffshub `useIsWorkerPoolReadyOrDisabled` pattern.
+function useIsWorkerPoolReady(): boolean {
+  const workerPool = useWorkerPool();
+  const [isReady, setIsReady] = useState(
+    () => workerPool?.isInitialized() ?? true,
+  );
+  const isReadyRef = useRef(isReady);
+  isReadyRef.current = isReady;
+  useEffect(() => {
+    if (workerPool == null) {
+      if (!isReadyRef.current) setIsReady(true);
+      return;
     }
-  | {
-      contentKind: "binary";
-      filePath: string;
-      additions: number;
-      deletions: number;
-      kind: ChangeKind;
-      oldBinary: boolean;
-      newBinary: boolean;
-    };
+    return workerPool.subscribeToStatChanges((stats) => {
+      const next =
+        stats.managerState === "initialized" || stats.workersFailed;
+      if (next !== isReadyRef.current) {
+        isReadyRef.current = next;
+        setIsReady(next);
+      }
+    });
+  }, [workerPool]);
+  return isReady;
+}
 
 export function DiffPanel({
   files,
@@ -165,10 +142,8 @@ export function DiffPanel({
   onDiffStyleChange,
   allExpanded,
   onToggleExpandAll,
-  expandAllSession,
   scrollToPath,
   scrollNonce,
-  onScrollComplete,
   annotationsByFile,
   hasOpenForm,
   totalCommentCount,
@@ -183,314 +158,426 @@ export function DiffPanel({
   onClearResolved,
   submittingReview,
 }: DiffPanelProps) {
-  const workerPool = useWorkerPool();
-  const cardHandles = useRef<Map<string, DiffCardHandle>>(new Map());
-  const refCallbacks = useRef<
-    Map<string, (handle: DiffCardHandle | null) => void>
+  const { resolvedTheme } = useTheme();
+  const themeType: "light" | "dark" =
+    resolvedTheme === "dark" ? "dark" : "light";
+  const { settings } = useDiffSettings();
+  const { font, fontSize, wrap } = settings;
+  const workerPoolReady = useIsWorkerPoolReady();
+
+  const viewerRef = useRef<CodeViewHandle<CommentMetadata> | null>(null);
+
+  // Tracks the last scrollNonce we successfully delivered to the viewer.
+  // The scroll effect bails when the viewer is not yet mounted (workers still
+  // initializing, or mid-remount on a viewerKey change); recording the last
+  // consumed nonce lets the effect retry once those preconditions flip without
+  // replaying a stale scroll on later, unrelated dep changes.
+  const lastScrollNonceRef = useRef<number | null>(null);
+
+  // Per-id version counter and last-seen prop snapshots used by the
+  // imperative sync effects. Reset on viewerKey change (i.e. CodeView
+  // remount) so the next batch of updateItem calls starts cleanly.
+  const versionsRef = useRef<Map<string, number>>(new Map());
+  const lastAnnotationsRef = useRef<
+    Map<string, DiffLineAnnotation<CommentMetadata>[]>
   >(new Map());
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const expandAllMetricsRef = useRef<ExpandAllSessionMetrics | null>(null);
+  const lastDiffsRef = useRef<Map<string, FileDiffContents>>(new Map());
 
-  const getCardRef = useCallback((path: string) => {
-    const existing = refCallbacks.current.get(path);
-    if (existing) return existing;
-    const callback = (handle: DiffCardHandle | null) => {
-      if (handle) {
-        cardHandles.current.set(path, handle);
-      } else {
-        cardHandles.current.delete(path);
-        refCallbacks.current.delete(path);
-      }
-    };
-    refCallbacks.current.set(path, callback);
-    return callback;
-  }, []);
-
-  useEffect(() => {
-    if (!scrollToPath) return;
-    const handle = cardHandles.current.get(scrollToPath);
-    if (handle) {
-      const el = handle.element;
-      if (!handle.isOpen()) {
-        handle.expand();
-        el?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } else {
-        const container = scrollContainerRef.current;
-        if (el && container) {
-          const cRect = container.getBoundingClientRect();
-          const eRect = el.getBoundingClientRect();
-          const fullyVisible =
-            eRect.top >= cRect.top && eRect.bottom <= cRect.bottom;
-          if (!fullyVisible) {
-            el.scrollIntoView({ behavior: "smooth", block: "start" });
-          }
-        }
-      }
-    }
-    onScrollComplete();
-    // scrollNonce intentionally in deps: re-fires when the same path is
-    // selected again (after manual collapse).
-  }, [scrollToPath, scrollNonce, onScrollComplete]);
-
-  const finalizeExpandAllSession = useCallback(
-    (reason: string) => {
-      const metrics = expandAllMetricsRef.current;
-      if (!metrics || metrics.finalized) return;
-      metrics.finalized = true;
-      if (metrics.rafId != null) cancelAnimationFrame(metrics.rafId);
-      if (metrics.timeoutId != null) clearTimeout(metrics.timeoutId);
-      metrics.observer?.disconnect();
-      metrics.unsubscribeWorker?.();
-      perfLogJson("ExpandAll", "complete", {
-        sessionId: metrics.id,
-        reason,
-        totalMs: +(performance.now() - metrics.startedAt).toFixed(2),
-        expectedCount: metrics.expectedCount,
-        textCount: metrics.textCount,
-        binaryCount: metrics.binaryCount,
-        propSyncCount: metrics.propSync.size,
-        contentMountCount: metrics.contentMount.size,
-        renderCommitCount: metrics.renderCommit.size,
-        workerStart: metrics.workerStart,
-        workerPeak: metrics.workerPeak,
-        workerEnd: getWorkerStatsSnapshot(workerPool),
-        longTaskCount: metrics.longTasks.length,
-        longTasks: metrics.longTasks,
-        frameGapMax:
-          metrics.frameGaps.length === 0
-            ? 0
-            : +Math.max(...metrics.frameGaps).toFixed(2),
-        frameGapTop: [...metrics.frameGaps]
-          .sort((left, right) => right - left)
-          .slice(0, 10)
-          .map((ms) => +ms.toFixed(2)),
-      });
-      perfLogJson("ExpandAll", "propSync:summary", {
-        sessionId: metrics.id,
-        ...summarizePerfEntries(metrics.propSync, 15),
-      });
-      perfLogJson("ExpandAll", "contentMount:summary", {
-        sessionId: metrics.id,
-        ...summarizePerfEntries(metrics.contentMount, 15),
-      });
-      perfLogJson("ExpandAll", "renderCommit:summary", {
-        sessionId: metrics.id,
-        ...summarizePerfEntries(metrics.renderCommit, 15),
-      });
-      if (expandAllMetricsRef.current?.id === metrics.id) {
-        expandAllMetricsRef.current = null;
-      }
-    },
-    [workerPool],
+  // Caches that survive remounts.
+  const parseCacheRef = useRef<WeakMap<FileDiffContents, FileDiffMetadata>>(
+    new WeakMap(),
   );
 
-  const handleExpandAllMetric = useCallback(
-    (metric: ExpandAllCardMetric) => {
-      const metrics = expandAllMetricsRef.current;
-      if (!metrics || metrics.finalized || metrics.id !== metric.sessionId) {
-        return;
-      }
-      const phaseMap =
-        metric.phase === "propSync"
-          ? metrics.propSync
-          : metric.phase === "contentMount"
-            ? metrics.contentMount
-            : metrics.renderCommit;
-      const previous = phaseMap.get(metric.path);
-      if (previous == null || metric.ms > previous) {
-        phaseMap.set(metric.path, metric.ms);
-      }
-      if (
-        metric.phase === "renderCommit" &&
-        metrics.expectedCount > 0 &&
-        metrics.renderCommit.size >= metrics.expectedCount
-      ) {
-        finalizeExpandAllSession("all-render-committed");
-      }
-    },
-    [finalizeExpandAllSession],
-  );
+  // Lookup for header chrome rendering.
+  const fileMetaByPath = useMemo(() => {
+    const map = new Map<string, FileEntry>();
+    for (const f of files) map.set(f.path, f);
+    return map;
+  }, [files]);
 
-  const parseCacheRef = useRef<
-    WeakMap<FileDiffContents, { fileDiff: FileDiffMetadata; totalLines: number }>
-  >(new WeakMap());
-
-  const parsedFiles = useMemo(() => {
-    const loopStart = performance.now();
-    const result: ParsedFile[] = [];
-    const cache = parseCacheRef.current;
-    let hits = 0;
-    let misses = 0;
-    let binary = 0;
-    let skipped = 0;
-    const parseAgg = createPerfAggregator("DiffPanel", "parseDiffFromFile");
+  // Fingerprints the visible file-path *set + kind* so CodeView remounts
+  // when entries are added/removed or flip between text/binary. Per-file
+  // content, annotation, and collapse mutations flow through updateItem
+  // and keep the same key.
+  const viewerKey = useMemo(() => {
+    const parts: string[] = [];
     for (const file of files) {
       const contents = diffs.get(file.path);
-      if (!contents) {
-        skipped += 1;
-        continue;
-      }
+      if (!contents) continue;
+      parts.push(`${file.path}:${contents.kind}`);
+    }
+    return parts.join("\0");
+  }, [files, diffs]);
+
+  // Reset trackers exactly when the viewerKey changes. Running in render is
+  // safe because we only touch refs the rest of the component owns.
+  const previousViewerKeyRef = useRef<string | null>(null);
+  if (previousViewerKeyRef.current !== viewerKey) {
+    previousViewerKeyRef.current = viewerKey;
+    versionsRef.current = new Map();
+    lastAnnotationsRef.current = new Map(annotationsByFile);
+    lastDiffsRef.current = new Map(diffs);
+  }
+
+  // Build seed items from the current diffs/annotations/expanded state. The
+  // resulting array is only consumed by CodeView at first mount; after that,
+  // updates flow through viewer.updateItem in the sync effects below.
+  const initialItems = useMemo<Item[]>(() => {
+    const start = performance.now();
+    const cache = parseCacheRef.current;
+    const collapsed = !allExpanded;
+    const items: Item[] = [];
+    let cacheHits = 0;
+    let cacheMisses = 0;
+    let binary = 0;
+    for (const file of files) {
+      const contents = diffs.get(file.path);
+      if (!contents) continue;
+      const annotations =
+        annotationsByFile.get(file.path) ?? EMPTY_ANNOTATIONS;
 
       if (contents.kind === "binary") {
         binary += 1;
-        result.push({
-          contentKind: "binary",
-          filePath: file.path,
-          additions: file.additions,
-          deletions: file.deletions,
-          kind: file.kind,
-          oldBinary: contents.oldBinary,
-          newBinary: contents.newBinary,
-        });
+        const fileItem: CodeViewFileItem<CommentMetadata> = {
+          id: file.path,
+          type: "file",
+          file: {
+            name: file.path,
+            contents: getBinaryDiffMessage(
+              file.kind,
+              contents.oldBinary,
+              contents.newBinary,
+            ),
+            lang: "text",
+          },
+          // CodeViewFileItem only allows LineAnnotation[]; binary placeholders
+          // never carry comments.
+          annotations: [],
+          collapsed,
+          version: 1,
+        };
+        items.push(fileItem);
         continue;
       }
 
-      let entry = cache.get(contents);
-      if (!entry) {
-        const parseStart = performance.now();
-        const fileDiff = parseDiffFromFile(contents.oldFile, contents.newFile);
-        const totalLines = Math.max(
-          fileDiff.additionLines.length,
-          fileDiff.deletionLines.length,
-        );
-        entry = { fileDiff, totalLines };
-        cache.set(contents, entry);
-        parseAgg.record(file.path, performance.now() - parseStart, totalLines);
-        misses += 1;
+      let parsed = cache.get(contents);
+      if (parsed) {
+        cacheHits += 1;
       } else {
-        hits += 1;
+        parsed = parseDiffFromFile(contents.oldFile, contents.newFile);
+        cache.set(contents, parsed);
+        cacheMisses += 1;
       }
-
-      result.push({
-        contentKind: "text",
-        filePath: file.path,
-        fileDiff: entry.fileDiff,
-        additions: file.additions,
-        deletions: file.deletions,
-        kind: file.kind,
-        totalLines: entry.totalLines,
-      });
+      const diffItem: CodeViewDiffItem<CommentMetadata> = {
+        id: file.path,
+        type: "diff",
+        fileDiff: parsed,
+        annotations,
+        collapsed,
+        version: 1,
+      };
+      items.push(diffItem);
     }
-    perfLog("DiffPanel", "parseLoop", {
+    perfLog("DiffPanel", "buildInitialItems", {
       totalFiles: files.length,
-      produced: result.length,
-      cacheHits: hits,
-      cacheMisses: misses,
+      produced: items.length,
+      cacheHits,
+      cacheMisses,
       binary,
-      skippedMissingContents: skipped,
-      ms: +(performance.now() - loopStart).toFixed(2),
+      ms: +(performance.now() - start).toFixed(2),
     });
-    parseAgg.flush(10);
-    return result;
-  }, [files, diffs]);
+    return items;
+  }, [files, diffs, annotationsByFile, allExpanded]);
 
+  const bumpVersion = useCallback((id: string): number => {
+    const next = (versionsRef.current.get(id) ?? 1) + 1;
+    versionsRef.current.set(id, next);
+    return next;
+  }, []);
+
+  // ── Sync per-file diff contents into existing items ──────────────
   useEffect(() => {
-    if (!expandAllSession || !allExpanded) {
-      finalizeExpandAllSession("cancelled");
-      return;
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const cache = parseCacheRef.current;
+    const prev = lastDiffsRef.current;
+    for (const [path, contents] of diffs) {
+      if (prev.get(path) === contents) continue;
+      const item = viewer.getItem(path);
+      if (!item) continue;
+      if (contents.kind === "binary") {
+        if (item.type !== "file") continue; // type swap → viewerKey remount
+        const meta = fileMetaByPath.get(path);
+        if (!meta) continue;
+        const updated: CodeViewFileItem<CommentMetadata> = {
+          ...item,
+          file: {
+            name: path,
+            contents: getBinaryDiffMessage(
+              meta.kind,
+              contents.oldBinary,
+              contents.newBinary,
+            ),
+            lang: "text",
+          },
+          version: bumpVersion(path),
+        };
+        viewer.updateItem(updated);
+      } else {
+        if (item.type !== "diff") continue;
+        let parsed = cache.get(contents);
+        if (!parsed) {
+          parsed = parseDiffFromFile(contents.oldFile, contents.newFile);
+          cache.set(contents, parsed);
+        }
+        const updated: CodeViewDiffItem<CommentMetadata> = {
+          ...item,
+          fileDiff: parsed,
+          version: bumpVersion(path),
+        };
+        viewer.updateItem(updated);
+      }
     }
+    lastDiffsRef.current = new Map(diffs);
+  }, [diffs, fileMetaByPath, bumpVersion]);
 
-    const textCount = parsedFiles.filter(
-      (parsedFile) => parsedFile.contentKind === "text",
-    ).length;
-    const binaryCount = parsedFiles.length - textCount;
-    const metrics: ExpandAllSessionMetrics = {
-      id: expandAllSession.id,
-      startedAt: expandAllSession.startedAt,
-      expectedCount: parsedFiles.length,
-      textCount,
-      binaryCount,
-      propSync: new Map(),
-      contentMount: new Map(),
-      renderCommit: new Map(),
-      workerStart: getWorkerStatsSnapshot(workerPool),
-      workerPeak: getWorkerStatsSnapshot(workerPool),
-      frameGaps: [],
-      lastFrameAt: performance.now(),
-      longTasks: [],
-      rafId: null,
-      timeoutId: null,
-      observer: null,
-      unsubscribeWorker: null,
-      finalized: false,
-    };
-    expandAllMetricsRef.current = metrics;
+  // ── Sync annotations into items ──────────────────────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const prev = lastAnnotationsRef.current;
+    for (const [path, annotations] of annotationsByFile) {
+      if (prev.get(path) === annotations) continue;
+      const item = viewer.getItem(path);
+      if (!item || item.type !== "diff") continue;
+      const updated: CodeViewDiffItem<CommentMetadata> = {
+        ...item,
+        annotations,
+        version: bumpVersion(path),
+      };
+      viewer.updateItem(updated);
+    }
+    for (const path of prev.keys()) {
+      if (annotationsByFile.has(path)) continue;
+      const item = viewer.getItem(path);
+      if (!item || item.type !== "diff") continue;
+      if (!item.annotations || item.annotations.length === 0) continue;
+      const updated: CodeViewDiffItem<CommentMetadata> = {
+        ...item,
+        annotations: [],
+        version: bumpVersion(path),
+      };
+      viewer.updateItem(updated);
+    }
+    lastAnnotationsRef.current = new Map(annotationsByFile);
+  }, [annotationsByFile, bumpVersion]);
 
-    perfLogJson("ExpandAll", "sessionStart", {
-      sessionId: metrics.id,
-      requestedFileCount: expandAllSession.requestedFileCount,
-      parsedFileCount: parsedFiles.length,
-      textCount,
-      binaryCount,
-      diffStyle,
-      workerStart: metrics.workerStart,
+  // ── Sync allExpanded toggle into items ───────────────────────────
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const wantCollapsed = !allExpanded;
+    for (const file of files) {
+      const item = viewer.getItem(file.path);
+      if (!item) continue;
+      if ((item.collapsed ?? false) === wantCollapsed) continue;
+      viewer.updateItem({
+        ...item,
+        collapsed: wantCollapsed,
+        version: bumpVersion(file.path),
+      } as Item);
+    }
+  }, [allExpanded, files, bumpVersion]);
+
+  // ── Scroll to file ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!scrollToPath) return;
+    if (lastScrollNonceRef.current === scrollNonce) return;
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const item = viewer.getItem(scrollToPath);
+    if (!item) return;
+    lastScrollNonceRef.current = scrollNonce;
+    if (item.collapsed) {
+      viewer.updateItem({
+        ...item,
+        collapsed: false,
+        version: bumpVersion(scrollToPath),
+      } as Item);
+    }
+    viewer.scrollTo({
+      type: "item",
+      id: scrollToPath,
+      align: "start",
+      behavior: "smooth",
     });
+    // workerPoolReady + viewerKey re-fire the effect after CodeView mounts or
+    // remounts so a scroll request issued during initialization isn't lost.
+  }, [scrollToPath, scrollNonce, bumpVersion, workerPoolReady, viewerKey]);
 
-    if (workerPool) {
-      metrics.unsubscribeWorker = workerPool.subscribeToStatChanges((stats) => {
-        metrics.workerPeak = mergeWorkerStatsPeak(metrics.workerPeak, {
-          managerState: stats.managerState,
-          workersFailed: stats.workersFailed,
-          totalWorkers: stats.totalWorkers,
-          busyWorkers: stats.busyWorkers,
-          queuedTasks: stats.queuedTasks,
-          pendingTasks: stats.pendingTasks,
-          fileCacheSize: stats.fileCacheSize,
-          diffCacheSize: stats.diffCacheSize,
-        });
-      });
-    }
+  // ── Renderers ────────────────────────────────────────────────────
 
-    const hasLongTaskSupport =
-      typeof PerformanceObserver !== "undefined" &&
-      Array.isArray(PerformanceObserver.supportedEntryTypes) &&
-      PerformanceObserver.supportedEntryTypes.includes("longtask");
-    if (hasLongTaskSupport) {
-      try {
-        const observer = new PerformanceObserver((list) => {
-          for (const entry of list.getEntries()) {
-            metrics.longTasks.push({
-              startMs: +(entry.startTime - metrics.startedAt).toFixed(2),
-              durationMs: +entry.duration.toFixed(2),
-            });
+  const toggleCollapsed = useCallback(
+    (item: Item) => {
+      const viewer = viewerRef.current;
+      if (!viewer) return;
+      viewer.updateItem({
+        ...item,
+        collapsed: !item.collapsed,
+        version: bumpVersion(item.id),
+      } as Item);
+    },
+    [bumpVersion],
+  );
+
+  const renderCustomHeader = useCallback(
+    (item: Item) => {
+      const meta = fileMetaByPath.get(item.id);
+      const parts = item.id.split("/");
+      const filename = parts.pop() ?? item.id;
+      const dir = parts.length > 0 ? parts.join("/") + "/" : "";
+      const status = meta ? FILE_STATUS[meta.kind] : undefined;
+      return (
+        <button
+          type="button"
+          onClick={() => toggleCollapsed(item)}
+          className="flex w-full cursor-pointer items-start gap-2.5 border-b border-border/50 bg-background px-4 py-2.5 text-left transition-colors hover:bg-muted/40"
+          aria-label={item.collapsed ? "Expand file" : "Collapse file"}
+        >
+          <IconChevronDown
+            className={cn(
+              "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
+              item.collapsed && "-rotate-90",
+            )}
+          />
+          <div className="min-w-0 flex-1">
+            <p
+              className={cn(
+                "truncate text-sm font-medium",
+                status?.color ?? "text-foreground",
+              )}
+            >
+              {filename}
+            </p>
+            {dir && (
+              <p className="truncate text-xs text-muted-foreground">{dir}</p>
+            )}
+          </div>
+          {meta && (meta.additions > 0 || meta.deletions > 0) && (
+            <div className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+              {meta.additions > 0 && (
+                <span className={DIFF_ADDITION_COLOR}>+{meta.additions}</span>
+              )}
+              {meta.deletions > 0 && (
+                <span className={DIFF_DELETION_COLOR}>-{meta.deletions}</span>
+              )}
+            </div>
+          )}
+        </button>
+      );
+    },
+    [fileMetaByPath, toggleCollapsed],
+  );
+
+  const renderAnnotation = useCallback(
+    (
+      annotation:
+        | DiffLineAnnotation<CommentMetadata>
+        | { lineNumber: number; metadata?: CommentMetadata | undefined },
+    ) => {
+      const meta = (annotation as DiffLineAnnotation<CommentMetadata>).metadata;
+      if (!meta) return null;
+      if (meta.status === "draft" && !meta.text) {
+        return (
+          <CommentForm
+            onSubmit={(text, actionType) =>
+              onSubmitAnnotation(
+                meta.filePath,
+                meta.side,
+                meta.lineEnd,
+                text,
+                actionType,
+              )
+            }
+            onCancel={() =>
+              onCancelAnnotation(meta.filePath, meta.side, meta.lineEnd)
+            }
+          />
+        );
+      }
+      return (
+        <CommentBubble
+          text={meta.text!}
+          actionType={meta.actionType!}
+          status={meta.status}
+          summary={meta.summary}
+          dismissReason={meta.dismissReason}
+          onDelete={() =>
+            onDeleteAnnotation(meta.filePath, meta.side, meta.lineEnd)
           }
-        });
-        observer.observe({ entryTypes: ["longtask"] });
-        metrics.observer = observer;
-      } catch {
-        metrics.observer = null;
-      }
-    }
+        />
+      );
+    },
+    [onSubmitAnnotation, onCancelAnnotation, onDeleteAnnotation],
+  );
 
-    const tick = (timestamp: number) => {
-      const current = expandAllMetricsRef.current;
-      if (!current || current.finalized || current.id !== metrics.id) return;
-      current.frameGaps.push(timestamp - current.lastFrameAt);
-      current.lastFrameAt = timestamp;
-      current.rafId = requestAnimationFrame(tick);
+  // ── CodeView style + options ─────────────────────────────────────
+
+  const codeViewStyle = useMemo<React.CSSProperties>(
+    () =>
+      ({
+        "--diffs-font-family": resolveFontFamily(font),
+        "--diffs-font-size": `${fontSize}px`,
+        "--diffs-line-height": `${resolveLineHeight(fontSize)}px`,
+      }) as React.CSSProperties,
+    [font, fontSize],
+  );
+
+  const addAnnotationForRange = useCallback(
+    (range: SelectedLineRange, id: string) => {
+      const target = getAnnotationTarget(range);
+      onAddAnnotation(id, target.side, target.lineStart, target.lineEnd);
+    },
+    [onAddAnnotation],
+  );
+
+  const options = useMemo<CodeViewOptions<CommentMetadata>>(() => {
+    type DiffCtx = { item: { type: "diff" | "file"; id: string } };
+    const handleSelectionEnd = (
+      range: SelectedLineRange | null,
+      ctx: DiffCtx,
+    ) => {
+      if (range == null || ctx.item.type !== "diff") return;
+      addAnnotationForRange(range, ctx.item.id);
     };
-    metrics.rafId = requestAnimationFrame(tick);
-    metrics.timeoutId = window.setTimeout(() => {
-      finalizeExpandAllSession("timeout");
-    }, 15000);
-
-    if (parsedFiles.length === 0) {
-      finalizeExpandAllSession("no-files");
-    }
-
-    return () => {
-      if (expandAllMetricsRef.current?.id === metrics.id) {
-        finalizeExpandAllSession("cleanup");
-      }
+    const handleGutterClick = (range: SelectedLineRange, ctx: DiffCtx) => {
+      if (ctx.item.type !== "diff") return;
+      addAnnotationForRange(range, ctx.item.id);
     };
-  }, [
-    allExpanded,
-    diffStyle,
-    expandAllSession,
-    finalizeExpandAllSession,
-    parsedFiles,
-    workerPool,
-  ]);
+    return {
+      theme: DEFAULT_THEMES,
+      themeType,
+      diffStyle,
+      // `scroll` is the safe default. `wrap` mode runs an O(N) per-line
+      // getBoundingClientRect pass on every render (see
+      // VirtualizedFileDiff.js reconcileHeights), which collapses paint
+      // timing on files with ultra-long lines (minified bundles) and shows
+      // the parent background as a black flash during fast scroll. Users
+      // who want wrap (typical for prose / markdown) opt in via Settings.
+      overflow: wrap ? "wrap" : "scroll",
+      lineDiffType: "word-alt",
+      expansionLineCount: 5,
+      hunkSeparators: "line-info",
+      stickyHeaders: true,
+      layout: { paddingTop: 0, paddingBottom: 0, gap: 1 },
+      enableLineSelection: !hasOpenForm,
+      enableGutterUtility: !hasOpenForm,
+      onLineSelectionEnd:
+        handleSelectionEnd as CodeViewOptions<CommentMetadata>["onLineSelectionEnd"],
+      onGutterUtilityClick:
+        handleGutterClick as CodeViewOptions<CommentMetadata>["onGutterUtilityClick"],
+    };
+  }, [addAnnotationForRange, diffStyle, hasOpenForm, themeType, wrap]);
 
   if (loading) {
     return (
@@ -501,8 +588,8 @@ export function DiffPanel({
   }
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
-      {parsedFiles.length > 0 && (
+    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden overscroll-contain bg-background [contain:strict]">
+      {initialItems.length > 0 && (
         <DiffToolbar
           diffStyle={diffStyle}
           onDiffStyleChange={onDiffStyleChange}
@@ -517,49 +604,26 @@ export function DiffPanel({
           submittingReview={submittingReview}
         />
       )}
-      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-auto">
-        {parsedFiles.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              No changes to review
-            </p>
-          </div>
-        ) : (
-          parsedFiles.map((parsedFile) => (
-            <DiffCard
-              key={parsedFile.filePath}
-              ref={getCardRef(parsedFile.filePath)}
-              filePath={parsedFile.filePath}
-              additions={parsedFile.additions}
-              deletions={parsedFile.deletions}
-              kind={parsedFile.kind}
-              diffStyle={diffStyle}
-              expanded={allExpanded}
-              expandAllSession={expandAllSession}
-              onExpandAllMetric={handleExpandAllMetric}
-              annotations={
-                annotationsByFile.get(parsedFile.filePath) ?? EMPTY_ANNOTATIONS
-              }
-              hasOpenForm={hasOpenForm}
-              onAddAnnotation={onAddAnnotation}
-              onCancelAnnotation={onCancelAnnotation}
-              onSubmitAnnotation={onSubmitAnnotation}
-              onDeleteAnnotation={onDeleteAnnotation}
-              totalLines={parsedFile.contentKind === "text" ? parsedFile.totalLines : 0}
-              {...(parsedFile.contentKind === "text"
-                ? {
-                    contentKind: "text" as const,
-                    fileDiff: parsedFile.fileDiff,
-                  }
-                : {
-                    contentKind: "binary" as const,
-                    oldBinary: parsedFile.oldBinary,
-                    newBinary: parsedFile.newBinary,
-                  })}
-            />
-          ))
-        )}
-      </div>
+      {initialItems.length === 0 ? (
+        <div className="flex h-full items-center justify-center">
+          <p className="text-sm text-muted-foreground">No changes to review</p>
+        </div>
+      ) : !workerPoolReady ? (
+        <div className="flex h-full items-center justify-center">
+          <p className="text-sm text-muted-foreground">Initializing…</p>
+        </div>
+      ) : (
+        <CodeView<CommentMetadata>
+          key={viewerKey}
+          ref={viewerRef}
+          initialItems={initialItems}
+          options={options}
+          className="relative min-h-0 min-w-0 w-full flex-1 overflow-y-auto overflow-x-clip overscroll-contain [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style] [&_diffs-container]:shadow-[0_-1px_0_var(--color-border),0_1px_0_var(--color-border)]"
+          style={codeViewStyle}
+          renderCustomHeader={renderCustomHeader}
+          renderAnnotation={renderAnnotation}
+        />
+      )}
     </div>
   );
 }

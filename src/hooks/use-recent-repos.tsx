@@ -1,4 +1,10 @@
-import { useCallback, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useState,
+  type ReactNode,
+} from "react";
 
 const STORAGE_KEY = "cub:recent-repos";
 const MAX_RECENTS = 8;
@@ -32,7 +38,15 @@ function writeStorage(items: RecentRepo[]) {
   }
 }
 
-export function useRecentRepos() {
+interface RecentReposContextValue {
+  recent: RecentRepo[];
+  addRecent: (path: string) => void;
+  removeRecent: (path: string) => void;
+}
+
+const RecentReposContext = createContext<RecentReposContextValue | null>(null);
+
+export function RecentReposProvider({ children }: { children: ReactNode }) {
   const [recent, setRecent] = useState<RecentRepo[]>(() => readStorage());
 
   const addRecent = useCallback((path: string) => {
@@ -54,5 +68,17 @@ export function useRecentRepos() {
     });
   }, []);
 
-  return { recent, addRecent, removeRecent };
+  return (
+    <RecentReposContext.Provider value={{ recent, addRecent, removeRecent }}>
+      {children}
+    </RecentReposContext.Provider>
+  );
+}
+
+export function useRecentRepos(): RecentReposContextValue {
+  const ctx = useContext(RecentReposContext);
+  if (!ctx) {
+    throw new Error("useRecentRepos must be used within RecentReposProvider");
+  }
+  return ctx;
 }

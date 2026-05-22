@@ -1,6 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { WorkerPoolContextProvider } from "@pierre/diffs/react";
+import { DEFAULT_THEMES } from "@pierre/diffs";
+import {
+  WorkerPoolContextProvider,
+  type WorkerInitializationRenderOptions,
+  type WorkerPoolOptions,
+} from "@pierre/diffs/react";
 import { ThemeProvider } from "next-themes";
 import { listen } from "@tauri-apps/api/event";
 import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
@@ -8,8 +13,50 @@ import App from "./App";
 import "./App.css";
 import { perfLog } from "@/lib/perf";
 import { DiffSettingsProvider } from "@/hooks/use-diff-settings";
+import { RecentReposProvider } from "@/hooks/use-recent-repos";
 
-const diffWorkerPoolSize = 4;
+const diffWorkerPoolSize = Math.min(
+  Math.max(1, (navigator.hardwareConcurrency ?? 2) - 1),
+  3,
+);
+
+const poolOptions: WorkerPoolOptions = {
+  poolSize: diffWorkerPoolSize,
+  totalASTLRUCacheSize: 100,
+  workerFactory: () => new DiffsWorker(),
+};
+
+// Preload the default theme + a broad set of common languages so the first
+// file a user opens is highlighted from cache instead of paying a per-worker
+// shiki initialization cost.
+const highlighterOptions: WorkerInitializationRenderOptions = {
+  theme: DEFAULT_THEMES,
+  preferredHighlighter: "shiki-wasm",
+  langs: [
+    "tsx",
+    "typescript",
+    "javascript",
+    "jsx",
+    "json",
+    "yaml",
+    "toml",
+    "rust",
+    "go",
+    "python",
+    "ruby",
+    "css",
+    "scss",
+    "html",
+    "svelte",
+    "vue",
+    "sh",
+    "bash",
+    "fish",
+    "md",
+    "mdx",
+    "sql",
+  ],
+};
 
 // ---- perf instrumentation boot ------------------------------------------
 // One-time environment facts: lets us correlate logs across reopens.
@@ -20,6 +67,7 @@ perfLog("boot", "env", {
     .deviceMemory,
   viewport: { w: window.innerWidth, h: window.innerHeight },
   mode: import.meta.env.MODE,
+  diffWorkerPoolSize,
 });
 
 // Mirror backend perf:log events into the web console so a single copy/paste
@@ -34,15 +82,14 @@ void listen<Record<string, unknown>>("perf:log", (event) => {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <WorkerPoolContextProvider
-      poolOptions={{
-        workerFactory: () => new DiffsWorker(),
-        poolSize: diffWorkerPoolSize,
-      }}
-      highlighterOptions={{}}
+      poolOptions={poolOptions}
+      highlighterOptions={highlighterOptions}
     >
       <ThemeProvider attribute="class" defaultTheme="system">
         <DiffSettingsProvider>
-          <App />
+          <RecentReposProvider>
+            <App />
+          </RecentReposProvider>
         </DiffSettingsProvider>
       </ThemeProvider>
     </WorkerPoolContextProvider>

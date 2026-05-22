@@ -16,6 +16,7 @@ import {
 } from "@/hooks/use-repo-status";
 import { useDiffs } from "@/hooks/use-diffs";
 import { useComments } from "@/hooks/use-comments";
+import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -35,7 +36,7 @@ import {
 import { toast } from "sonner";
 import { listen } from "@tauri-apps/api/event";
 import type { CommentStatus } from "@/types/comments";
-import { perfLog, perfLogJson, type ExpandAllSession } from "@/lib/perf";
+import { perfLog } from "@/lib/perf";
 
 interface CommentStatusPayload {
   review_id: string;
@@ -45,23 +46,19 @@ interface CommentStatusPayload {
   dismiss_reason: string | null;
 }
 
-const AUTO_EXPAND_FILE_LIMIT = 100;
-
 function App() {
   const { workdir, status, error, refresh, open, close } = useRepoStatus();
+  const { addRecent } = useRecentRepos();
   const { diffs, loading } = useDiffs(status?.staged, status?.unstaged);
   const comments = useComments();
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("split");
-  const [allExpanded, setAllExpanded] = useState(false);
-  const [expandAllSession, setExpandAllSession] =
-    useState<ExpandAllSession | null>(null);
+  const [allExpanded, setAllExpanded] = useState(true);
   const [scrollToPath, setScrollToPath] = useState<string | null>(null);
   const [scrollNonce, setScrollNonce] = useState(0);
   const [submittingReview, setSubmittingReview] = useState(false);
   const [optimisticStage, setOptimisticStage] = useState<Map<string, boolean>>(
     new Map(),
   );
-  const expandSessionIdRef = useRef(0);
   const restoreOpenStartedRef = useRef(false);
   const [branch, setBranch] = useState<string | null>(null);
 
@@ -246,68 +243,15 @@ function App() {
     return files;
   }, [status]);
 
-  const autoExpandedRepoRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!workdir) {
-      autoExpandedRepoRef.current = null;
-      setExpandAllSession(null);
-      return;
-    }
-    if (!status) return;
-    if (autoExpandedRepoRef.current === workdir) return;
-    autoExpandedRepoRef.current = workdir;
-    const totalFiles = allFiles.length;
-    const shouldExpand = totalFiles <= AUTO_EXPAND_FILE_LIMIT;
-    perfLog("App", "allExpanded:auto", {
-      totalFiles,
-      shouldExpand,
-      limit: AUTO_EXPAND_FILE_LIMIT,
-    });
-    setExpandAllSession(null);
-    setAllExpanded(shouldExpand);
-  }, [allFiles.length, status, workdir]);
-
   const handleToggleExpandAll = useCallback(() => {
-    if (allExpanded) {
-      perfLogJson("ExpandAll", "collapseClick", {
-        activeSessionId: expandAllSession?.id ?? null,
-        totalFiles: allFiles.length,
-      });
-      setExpandAllSession(null);
-      setAllExpanded(false);
-      return;
-    }
-    const nextSession: ExpandAllSession = {
-      id: ++expandSessionIdRef.current,
-      startedAt: performance.now(),
-      requestedFileCount: allFiles.length,
-    };
-    perfLogJson("ExpandAll", "click", {
-      sessionId: nextSession.id,
-      totalFiles: allFiles.length,
-      loadedDiffs: diffs.size,
-      loading,
-      diffStyle,
-    });
-    setExpandAllSession(nextSession);
-    setAllExpanded(true);
-  }, [
-    allExpanded,
-    allFiles.length,
-    diffStyle,
-    diffs.size,
-    expandAllSession?.id,
-    loading,
-  ]);
+    setAllExpanded((v) => !v);
+  }, []);
 
   const handleSelectFile = useCallback((path: string) => {
     setScrollToPath(path);
     setScrollNonce((n) => n + 1);
   }, []);
 
-  const handleScrollComplete = useCallback(() => {
-    setScrollToPath(null);
-  }, []);
 
   const stagedPathsRef = useRef(stagedPaths);
   stagedPathsRef.current = stagedPaths;
@@ -445,8 +389,16 @@ function App() {
   }, [refresh, workdir]);
 
   // Honor `cub [path]` first; otherwise restore the last successfully opened repo.
-  const openRef = useRef(open);
-  openRef.current = open;
+  const openAndRecord = useCallback(
+    async (path: string) => {
+      const dir = await open(path);
+      addRecent(dir);
+      return dir;
+    },
+    [open, addRecent],
+  );
+  const openRef = useRef(openAndRecord);
+  openRef.current = openAndRecord;
   useEffect(() => {
     let cancelled = false;
     getLaunchPath()
@@ -473,7 +425,7 @@ function App() {
   if (!workdir) {
     return (
       <>
-        <Onboarding onOpened={open} />
+        <Onboarding onOpened={openAndRecord} />
         <Toaster />
       </>
     );
@@ -528,10 +480,8 @@ function App() {
             onDiffStyleChange={setDiffStyle}
             allExpanded={allExpanded}
             onToggleExpandAll={handleToggleExpandAll}
-            expandAllSession={expandAllSession}
             scrollToPath={scrollToPath}
             scrollNonce={scrollNonce}
-            onScrollComplete={handleScrollComplete}
             annotationsByFile={comments.annotationsByFile}
             hasOpenForm={comments.hasOpenForm}
             totalCommentCount={comments.totalCommentCount}
@@ -551,7 +501,7 @@ function App() {
         <StatusBar
           workdir={workdir}
           branch={branch}
-          onOpenRepo={open}
+          onOpenRepo={openAndRecord}
           onBranchSwitched={handleBranchSwitched}
         />
       </div>

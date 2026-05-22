@@ -12,6 +12,7 @@ import {
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
@@ -50,7 +51,7 @@ import { cn } from "@/lib/utils";
 interface StatusBarProps {
   workdir: string;
   branch: string | null;
-  onOpenRepo: (path: string) => Promise<void>;
+  onOpenRepo: (path: string) => Promise<string>;
   onBranchSwitched: () => void | Promise<void>;
 }
 
@@ -100,10 +101,10 @@ function ProjectSegment({
   onOpenRepo,
 }: {
   workdir: string;
-  onOpenRepo: (path: string) => Promise<void>;
+  onOpenRepo: (path: string) => Promise<string>;
 }) {
   const [open, setOpen] = useState(false);
-  const { recent, addRecent } = useRecentRepos();
+  const { recent } = useRecentRepos();
   const recentPaths = useMemo(() => recent.map((r) => r.path), [recent]);
   const branchByPath = useRecentBranches(recentPaths);
   const others = useMemo(
@@ -115,7 +116,6 @@ function ProjectSegment({
     setOpen(false);
     try {
       await onOpenRepo(path);
-      addRecent(path);
     } catch (e) {
       toast.error(`Failed to open: ${e}`);
     }
@@ -127,7 +127,6 @@ function ProjectSegment({
       const selected = await openDialog({ directory: true, multiple: false });
       if (typeof selected !== "string") return;
       await onOpenRepo(selected);
-      addRecent(selected);
     } catch (e) {
       toast.error(`Open failed: ${e}`);
     }
@@ -326,8 +325,8 @@ function SettingsDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const { theme, setTheme } = useTheme();
-  const { settings, setFont, setFontSize } = useDiffSettings();
-  const { font, fontSize } = settings;
+  const { settings, setFont, setFontSize, setWrap } = useDiffSettings();
+  const { font, fontSize, wrap } = settings;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -403,6 +402,22 @@ function SettingsDialog({
               >
                 <IconPlus />
               </Button>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">
+              Line wrapping
+            </span>
+            <div className="flex h-8 items-center gap-2">
+              <Switch
+                checked={wrap}
+                onCheckedChange={setWrap}
+                size="sm"
+                aria-label="Wrap long lines"
+              />
+              <span className="text-sm text-muted-foreground">
+                {wrap ? "Wrap long lines" : "Scroll horizontally"}
+              </span>
             </div>
           </div>
         </div>

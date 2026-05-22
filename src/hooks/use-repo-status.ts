@@ -17,7 +17,7 @@ interface UseRepoStatusReturn {
   status: MergedRepoStatus | null;
   error: string | null;
   refresh: () => Promise<void>;
-  open: (path: string) => Promise<void>;
+  open: (path: string) => Promise<string>;
   close: () => void;
 }
 
@@ -143,12 +143,18 @@ export function useRepoStatus(): UseRepoStatusReturn {
       perfLog("useRepoStatus", "open:start", { path });
       setError(null);
       try {
-        const dir = await perfTimedAsync(
+        const rawDir = await perfTimedAsync(
           "useRepoStatus",
           "open:openRepo",
           () => openRepo(path),
           { path },
         );
+        const trimmed = rawDir.replace(/[\\/]+$/, "");
+        // Preserve filesystem roots: "/" trims to "" and "C:\" trims to "C:" (a
+        // drive-relative path, not the drive root). Fall back to the raw value
+        // in those cases.
+        const dir =
+          trimmed === "" || /^[A-Za-z]:$/.test(trimmed) ? rawDir : trimmed;
         const raw = await perfTimedAsync(
           "useRepoStatus",
           "open:getRepoStatus",
@@ -172,6 +178,7 @@ export function useRepoStatus(): UseRepoStatusReturn {
           totalFiles: raw.staged.length + raw.unstaged.length + raw.untracked.length,
           ms: markOpen(),
         });
+        return dir;
       } catch (e) {
         perfLog("useRepoStatus", "open:error", {
           path,
