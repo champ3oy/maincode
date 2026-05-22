@@ -83,6 +83,10 @@ fn workspace_root() -> Result<PathBuf, String> {
 fn workspace_root() -> Result<PathBuf, String> {
     let exe =
         std::env::current_exe().map_err(|e| format!("failed to resolve executable path: {e}"))?;
+    // Canonicalise so a launcher symlink (e.g. /opt/homebrew/bin/cub created
+    // by the Homebrew cask `binary` stanza) resolves to the real .app path —
+    // otherwise the sidecar lookup walks the wrong tree.
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
     exe.parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "failed to resolve workspace root from executable".to_string())
