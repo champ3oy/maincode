@@ -81,14 +81,14 @@ jobs:
         run: |
           set -euo pipefail
           BUNDLE_DIR=src-tauri/target/${{ matrix.target }}/release/bundle
+          # `mapfile` requires bash 4+, but macOS runners ship bash 3.2.
+          # Stick to shell globbing, which works everywhere.
           shopt -s nullglob
-          # Tauri's filename conventions differ across targets; collect by
-          # bundle-format directory rather than hardcoding names.
-          mapfile -t SRC < <(
-            ls "$BUNDLE_DIR"/dmg/*.dmg \
-               "$BUNDLE_DIR"/deb/*.deb \
-               "$BUNDLE_DIR"/appimage/*.AppImage \
-               "$BUNDLE_DIR"/rpm/*.rpm 2>/dev/null || true
+          SRC=(
+            "$BUNDLE_DIR"/dmg/*.dmg
+            "$BUNDLE_DIR"/deb/*.deb
+            "$BUNDLE_DIR"/appimage/*.AppImage
+            "$BUNDLE_DIR"/rpm/*.rpm
           )
           if [ ${#SRC[@]} -eq 0 ]; then
             echo "::error::no bundles found under $BUNDLE_DIR"
@@ -96,6 +96,7 @@ jobs:
             exit 1
           fi
           : > files.txt
+          : > upload_list.txt
           for path in "${SRC[@]}"; do
             base=$(basename "$path")
             cp "$path" "$base"
