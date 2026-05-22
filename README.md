@@ -86,13 +86,28 @@ Tools exposed:
 brew install --cask ephraimduncan/cub/cub
 ```
 
-This pulls the latest universal `.dmg` from
-[GitHub releases](https://github.com/ephraimduncan/cub.dev/releases) and drops
-`Cub.app` into `/Applications` plus a `cub` CLI symlink in your Homebrew
-`bin/`. Upgrades land via `brew upgrade --cask cub`.
+The cask picks the right architecture-specific `.dmg` from
+[GitHub releases](https://github.com/ephraimduncan/cub.dev/releases)
+(`Cub_<version>_aarch64.dmg` on Apple Silicon, `Cub_<version>_x64.dmg`
+on Intel), drops `Cub.app` into `/Applications`, and adds a `cub` CLI
+symlink in your Homebrew `bin/`. Upgrades land via
+`brew upgrade --cask cub`.
 
-The shipped binary is ad-hoc signed (no Developer ID / notarization). The cask
-strips the macOS quarantine attribute so first launch isn't blocked.
+The shipped binary is ad-hoc signed (no Developer ID / notarization).
+The cask strips the macOS quarantine attribute so first launch isn't
+blocked.
+
+### Linux
+
+No Homebrew cask — Cask is macOS-only. Grab a build from
+[GitHub releases](https://github.com/ephraimduncan/cub.dev/releases):
+
+- `.deb` for Debian/Ubuntu (`sudo apt install ./Cub_<version>_amd64.deb`)
+- `.AppImage` for any distro (`chmod +x Cub_<version>_amd64.AppImage && ./Cub_<version>_amd64.AppImage`)
+- `.rpm` for Fedora/RHEL (`sudo dnf install ./Cub-<version>-1.x86_64.rpm`)
+
+Bun is still required for the MCP sidecar — install via
+`curl -fsSL https://bun.sh/install | bash` or your package manager.
 
 ### From source
 

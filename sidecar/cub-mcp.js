@@ -12,6 +12,7 @@ import { Database } from "bun:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod/v4";
+import pkg from "../package.json" with { type: "json" };
 
 const STATE_DIR = path.join(os.homedir(), ".cub");
 const STATE_PATH = path.join(STATE_DIR, "review-bridge.json");
@@ -621,7 +622,7 @@ async function httpRequest(method, path, body, options = {}) {
 async function startMcpServer() {
   const server = new McpServer({
     name: "cub",
-    version: "0.2.0",
+    version: pkg.version,
   });
 
   // ── get_review ────────────────────────────────────────────────────

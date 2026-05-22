@@ -30,45 +30,58 @@ brew install --cask ephraimduncan/cub/cub
    ```bash
    (cd src-tauri && cargo update -p cub)
    ```
-3. Commit on a release branch, open a PR, merge to `main`.
-4. **Tag and push** from `main`:
+3. Bump `version` in `Casks/cub.rb` (SHAs get replaced after CI publishes the artifacts; placeholder zeros are fine here).
+4. Commit on a release branch, open a PR, merge to `main`.
+5. **Tag and push** from `main`:
    ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
-5. The `release` workflow (.github/workflows/release.yml) runs on `macos-14`,
-   builds a universal `.app` + `.dmg`, and uploads `Cub_<version>_universal.dmg`
-   to a **draft** GitHub release. SHA256 is printed in the release notes and as
-   a workflow `::notice`.
-6. Open the draft release, sanity-check the DMG, then **publish**.
-7. **Update the cask** in `ephraimduncan/homebrew-cub`:
+6. The `release` workflow fans out across three runners:
+   - `macos-14` → `Cub_<v>_aarch64.dmg`
+   - `macos-13` → `Cub_<v>_x64.dmg`
+   - `ubuntu-22.04` → `Cub_<v>_amd64.deb`, `Cub_<v>_amd64.AppImage`, `Cub-<v>-1.x86_64.rpm`
+
+   Each job uploads to a single **draft** GitHub release and prints the SHA256 of every artifact as a workflow `::notice` (and stages them as `files.txt` in the job's working directory).
+7. Open the draft release, sanity-check the artifacts, then **publish**.
+8. **Update the cask** in `ephraimduncan/homebrew-cub`:
    ```ruby
-   version "0.2.0"
-   sha256 "<paste from release notes>"
+   version "0.3.0"
+   on_arm do
+     sha256 "<aarch64 dmg sha>"
+     ...
+   end
+   on_intel do
+     sha256 "<x64 dmg sha>"
+     ...
+   end
    ```
    Commit & push.
 
 ## Triggering a build without a tag
 
-The workflow accepts a `workflow_dispatch` input. Run it from the Actions tab
-with `tag: v0.2.0-rc1` to produce a draft release without touching `main`.
+The workflow accepts a `workflow_dispatch` input. Run it from the Actions tab with `tag: v0.3.0-rc1` to produce a draft release without touching `main`.
 
 ## Local smoke build
 
 ```bash
+# Apple Silicon
 CI=true bun run tauri build --target aarch64-apple-darwin --bundles dmg,app
-# → src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Cub_<version>_aarch64.dmg
+# → src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Cub_<v>_aarch64.dmg
+
+# Intel cross-compile from arm64 host (needs the x86_64 rust target installed)
+rustup target add x86_64-apple-darwin
+CI=true bun run tauri build --target x86_64-apple-darwin --bundles dmg,app
+
+# Linux (requires the libwebkit2gtk/libgtk/libsoup/etc. dev packages — see
+# the workflow's "Install Linux build deps" step)
+CI=true bun run tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage,rpm
 ```
 
-`CI=true` keeps the Tauri CLI from prompting; the `--bundles dmg,app` flag
-skips updater bundles (which would require a signing private key).
+`CI=true` keeps the Tauri CLI from prompting.
 
 ## Notes on signing
 
-The shipped binary is **ad-hoc signed only** — no Apple Developer ID, no
-notarization. The cask runs `xattr -dr com.apple.quarantine` in `postflight`
-so first launch isn't blocked by Gatekeeper. If you later get a Developer ID
-and notarize, drop that `postflight` and add the standard `app` stanza.
+The macOS binary is **ad-hoc signed only** — no Apple Developer ID, no notarization. The cask runs `xattr -dr com.apple.quarantine` in `postflight` so first launch isn't blocked by Gatekeeper. If you later get a Developer ID and notarize, drop that `postflight`.
 
-The Tauri updater plugin is still wired in but has a placeholder pubkey,
-so in-app updates are disabled. Users update via `brew upgrade --cask cub`.
+The Tauri updater plugin is still wired in but has a placeholder pubkey, so in-app updates are disabled. Users update via `brew upgrade --cask cub` (macOS) or by reinstalling the latest Linux artifact.

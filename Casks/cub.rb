@@ -1,19 +1,29 @@
 cask "cub" do
-  version "0.2.1"
-  sha256 "726df73466814a6c96f8698a31efb74c63258318cba69fae3608f5dee896c241"
+  version "0.3.0"
 
-  url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_universal.dmg"
+  on_arm do
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+
+    url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_aarch64.dmg"
+  end
+  on_intel do
+    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+
+    url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_x64.dmg"
+  end
+
   name "Cub"
   desc "Simple git client with AI code review built in"
   homepage "https://github.com/ephraimduncan/cub.dev"
 
   livecheck do
-    url :url
+    url "https://github.com/ephraimduncan/cub.dev/releases/latest"
     strategy :github_latest
   end
 
-  # The app is ad-hoc signed (no Developer ID / notarization). Without this,
-  # macOS Gatekeeper blocks first launch from the cask download.
+  # The app is ad-hoc signed (no Developer ID / notarization). Without
+  # the postflight below, macOS Gatekeeper blocks first launch from the
+  # cask download.
   auto_updates false
   depends_on macos: :big_sur
 
@@ -21,9 +31,8 @@ cask "cub" do
   binary "#{appdir}/Cub.app/Contents/MacOS/cub"
 
   postflight do
-    # Strip the quarantine attribute placed by macOS on cask downloads so the
-    # ad-hoc signed app can launch without right-click → Open. Re-applying it
-    # after copy mirrors what `--no-quarantine` does, scoped to this cask.
+    # Strip the quarantine attribute placed by macOS on cask downloads so
+    # the ad-hoc signed app can launch without right-click → Open.
     system_command "/usr/bin/xattr",
                    args: ["-dr", "com.apple.quarantine", "#{appdir}/Cub.app"],
                    sudo: false
