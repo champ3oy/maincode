@@ -1,15 +1,19 @@
 cask "cub" do
-  version "0.3.0"
-
   on_arm do
-    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    version "0.3.0"
+    sha256 "6f94efefc4bc34194625e3fd393617dad0d3f7a9dd6a82baabdfbb97d0b4877f"
 
     url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_aarch64.dmg"
   end
   on_intel do
-    sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    # macOS Intel build for v0.3.0 is still queued. Fall back to the
+    # known-good universal artifact from v0.2.1 so `brew install` on
+    # Intel keeps working; swap to Cub_#{version}_x64.dmg in a follow-up
+    # cask PR once the macos-intel job finishes.
+    version "0.2.1"
+    sha256 "726df73466814a6c96f8698a31efb74c63258318cba69fae3608f5dee896c241"
 
-    url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_x64.dmg"
+    url "https://github.com/ephraimduncan/cub.dev/releases/download/v#{version}/Cub_#{version}_universal.dmg"
   end
 
   name "Cub"
