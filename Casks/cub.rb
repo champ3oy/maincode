@@ -16,7 +16,6 @@ cask "cub" do
   # macOS Gatekeeper blocks first launch from the cask download.
   auto_updates false
   depends_on macos: :big_sur
-  depends_on formula: "bun"
 
   app "Cub.app"
   binary "#{appdir}/Cub.app/Contents/MacOS/cub"
@@ -38,4 +37,14 @@ cask "cub" do
     "~/Library/Saved Application State/com.ephraimduncan.cub.savedState",
     "~/Library/WebKit/com.ephraimduncan.cub",
   ]
+
+  caveats <<~EOS
+    Cub's MCP sidecar requires Bun. Install one of:
+
+      brew tap oven-sh/bun && brew install bun
+      curl -fsSL https://bun.sh/install | bash
+
+    Cub auto-detects Bun at /opt/homebrew/bin/bun, /usr/local/bin/bun,
+    ~/.bun/bin/bun, ~/.local/bin/bun, or anywhere on PATH.
+  EOS
 end
