@@ -14,7 +14,7 @@ interface SidebarHistoryProps {
 }
 
 const PREFETCH_RADIUS = 50;
-const ROW_HEIGHT = 56;
+const ROW_HEIGHT = 68;
 
 // Zed-style overlay scrollbar: thin, semi-transparent, fades in on hover.
 // Tailwind doesn't ship thumb utilities, so we inline the webkit + standard

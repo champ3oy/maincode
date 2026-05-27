@@ -89,6 +89,10 @@ export function CommitAvatar({
     };
   }, [normalized, skip, size]);
 
+  // Initial text scales with avatar size so the fallback letter stays
+  // optically balanced from 14px chips up to 40px header avatars.
+  const initialFontSize = Math.max(8, Math.round(size * 0.55));
+
   if (status === "ok") {
     return (
       <img
@@ -98,7 +102,10 @@ export function CommitAvatar({
         alt={name}
         aria-label={name}
         title={name}
-        className={cn("shrink-0 rounded-full", className)}
+        className={cn(
+          "shrink-0 rounded-full outline outline-1 -outline-offset-1 outline-foreground/10",
+          className,
+        )}
       />
     );
   }
@@ -107,9 +114,9 @@ export function CommitAvatar({
     <div
       aria-label={name}
       title={name}
-      style={{ width: size, height: size, background: bg }}
+      style={{ width: size, height: size, background: bg, fontSize: initialFontSize }}
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-full text-[10px] font-medium text-white",
+        "flex shrink-0 items-center justify-center rounded-full font-medium text-white outline outline-1 -outline-offset-1 outline-foreground/10",
         className,
       )}
     >

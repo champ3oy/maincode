@@ -35,40 +35,42 @@ function CommitRowImpl({
       aria-selected={selected}
       onClick={() => onSelect(oid)}
       className={cn(
-        "flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left",
+        "flex w-full cursor-pointer flex-col gap-1.5 px-3 py-3 text-left",
         selected
           ? "bg-accent text-accent-foreground"
-          : "hover:bg-muted/40",
+          : "hover:bg-muted",
       )}
     >
-      <CommitAvatar
-        email={resolved ? authorEmail : ""}
-        name={resolved ? authorName : "?"}
-        size={28}
-      />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <p
-          className={cn(
-            "truncate text-sm font-medium leading-tight",
-            selected ? "text-accent-foreground" : "text-foreground",
-          )}
-        >
-          {subject}
-        </p>
-        <p
-          className={cn(
-            "flex items-center gap-1 truncate text-xs",
-            selected
-              ? "text-accent-foreground/80"
-              : "text-muted-foreground",
-          )}
-        >
-          <span className="truncate">{authorName || "—"}</span>
-          <span>·</span>
-          <span className="shrink-0">{relative}</span>
-          <span>·</span>
-          <span className="shrink-0 font-mono">{shortSha}</span>
-        </p>
+      <p
+        className={cn(
+          "truncate text-sm font-medium leading-tight",
+          selected ? "text-accent-foreground" : "text-foreground",
+        )}
+      >
+        {subject}
+      </p>
+      <div
+        className={cn(
+          "flex items-center gap-1.5 truncate text-xs leading-tight",
+          selected
+            ? "text-accent-foreground/80"
+            : "text-muted-foreground",
+        )}
+      >
+        <CommitAvatar
+          email={resolved ? authorEmail : ""}
+          name={resolved ? authorName : "?"}
+          size={14}
+        />
+        {authorName && (
+          <>
+            <span className="truncate">{authorName}</span>
+            <span className="opacity-60">·</span>
+          </>
+        )}
+        <span className="shrink-0">{relative}</span>
+        <span className="opacity-60">·</span>
+        <span className="shrink-0 font-mono">{shortSha}</span>
       </div>
     </button>
   );
