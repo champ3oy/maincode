@@ -174,6 +174,49 @@ pub struct RepoStatus {
     pub untracked: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct BranchDiff {
+    pub base_ref: String,
+    pub base_oid: String,
+    pub head_oid: String,
+    pub files: Vec<FileEntry>,
+}
+
+fn resolve_base_ref(repo: &Repository) -> Option<(String, git2::Oid)> {
+    if let Ok(reference) = repo.find_reference("refs/remotes/origin/HEAD") {
+        if let Some(target) = reference.symbolic_target() {
+            if let Ok(resolved) = repo.find_reference(target) {
+                if let Some(oid) = resolved.target() {
+                    let short = target
+                        .strip_prefix("refs/remotes/")
+                        .unwrap_or(target)
+                        .to_string();
+                    return Some((short, oid));
+                }
+            }
+        }
+    }
+
+    const FALLBACK_NAMES: &[&str] = &["main", "master", "trunk"];
+    for name in FALLBACK_NAMES {
+        let remote_full = format!("refs/remotes/origin/{name}");
+        if let Ok(reference) = repo.find_reference(&remote_full) {
+            if let Some(oid) = reference.target() {
+                return Some((format!("origin/{name}"), oid));
+            }
+        }
+    }
+    for name in FALLBACK_NAMES {
+        let local_full = format!("refs/heads/{name}");
+        if let Ok(reference) = repo.find_reference(&local_full) {
+            if let Some(oid) = reference.target() {
+                return Some(((*name).to_string(), oid));
+            }
+        }
+    }
+    None
+}
+
 /// Open a git repository at `path` and store it in app state.
 /// Returns the absolute workdir path on success.
 #[tauri::command]
@@ -277,6 +320,8 @@ enum CountDiffKind {
     StagedAgainstHead(Option<git2::Oid>),
     /// index → workdir.
     Unstaged,
+    /// base tree → head tree (branch diff).
+    TwoTrees(git2::Oid, git2::Oid),
 }
 
 fn build_diff_for_count<'a>(
@@ -289,6 +334,11 @@ fn build_diff_for_count<'a>(
             repo.diff_tree_to_index(tree.as_ref(), None, None)
         }
         CountDiffKind::Unstaged => repo.diff_index_to_workdir(None, None),
+        CountDiffKind::TwoTrees(base_oid, head_oid) => {
+            let base_tree = repo.find_tree(*base_oid)?;
+            let head_tree = repo.find_tree(*head_oid)?;
+            repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)
+        }
     }
 }
 
@@ -543,6 +593,105 @@ pub fn get_repo_status(app: AppHandle, state: State<AppState>) -> Result<RepoSta
         unstaged,
         untracked,
     })
+}
+
+#[tauri::command]
+pub fn get_branch_diff(state: State<AppState>) -> Result<Option<BranchDiff>, String> {
+    let workdir_path: PathBuf;
+    let base_ref: String;
+    let base_oid: git2::Oid;
+    let head_oid: git2::Oid;
+    let base_tree_oid: git2::Oid;
+    let head_tree_oid: git2::Oid;
+    let status_entries: Vec<(String, ChangeKind)>;
+    let delta_count: usize;
+
+    {
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
+
+        let Some((short_name, candidate_oid)) = resolve_base_ref(repo) else {
+            return Ok(None);
+        };
+
+        let head_obj = repo
+            .head()
+            .map_err(|e| format!("failed to read HEAD: {e}"))?
+            .peel_to_commit()
+            .map_err(|e| format!("failed to peel HEAD: {e}"))?;
+        let head_commit_oid = head_obj.id();
+
+        let merge_base_oid = repo
+            .merge_base(head_commit_oid, candidate_oid)
+            .map_err(|e| format!("failed to find merge base: {e}"))?;
+
+        let base_commit = repo
+            .find_commit(merge_base_oid)
+            .map_err(|e| format!("failed to find base commit: {e}"))?;
+        let head_commit = repo
+            .find_commit(head_commit_oid)
+            .map_err(|e| format!("failed to find head commit: {e}"))?;
+
+        let base_tree = base_commit
+            .tree()
+            .map_err(|e| format!("failed to get base tree: {e}"))?;
+        let head_tree = head_commit
+            .tree()
+            .map_err(|e| format!("failed to get head tree: {e}"))?;
+
+        let diff = repo
+            .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)
+            .map_err(|e| format!("failed to diff trees: {e}"))?;
+
+        let mut entries: Vec<(String, ChangeKind)> = Vec::new();
+        for delta in diff.deltas() {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .and_then(|p| p.to_str())
+                .map(str::to_owned);
+            let Some(path) = path else { continue };
+            let kind = match delta.status() {
+                git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => ChangeKind::Added,
+                git2::Delta::Deleted => ChangeKind::Deleted,
+                git2::Delta::Renamed => ChangeKind::Renamed,
+                git2::Delta::Typechange => ChangeKind::Typechange,
+                _ => ChangeKind::Modified,
+            };
+            entries.push((path, kind));
+        }
+
+        base_ref = short_name;
+        base_oid = merge_base_oid;
+        head_oid = head_commit_oid;
+        base_tree_oid = base_tree.id();
+        head_tree_oid = head_tree.id();
+        delta_count = entries.len();
+        status_entries = entries;
+    }
+
+    let counts = count_diff_lines_parallel(
+        &workdir_path,
+        CountDiffKind::TwoTrees(base_tree_oid, head_tree_oid),
+        delta_count,
+    );
+
+    let files: Vec<FileEntry> = status_entries
+        .into_iter()
+        .map(|(path, kind)| {
+            let (additions, deletions) = counts.get(&path).copied().unwrap_or((0, 0));
+            FileEntry { path, kind, additions, deletions }
+        })
+        .collect();
+
+    Ok(Some(BranchDiff {
+        base_ref,
+        base_oid: base_oid.to_string(),
+        head_oid: head_oid.to_string(),
+        files,
+    }))
 }
 
 /// Return the old (HEAD) and new (workdir) contents of a file for client-side diffing.
@@ -823,6 +972,107 @@ pub fn get_file_contents_batch(
             "totalMs": ms_since(total_start),
         }),
     );
+
+    Ok(responses)
+}
+
+#[tauri::command]
+pub fn get_branch_file_contents_batch(
+    base_oid: String,
+    head_oid: String,
+    requests: Vec<String>,
+    state: State<AppState>,
+) -> Result<Vec<FileContentsBatchItem>, String> {
+    let requested_count = requests.len();
+    let workdir_path: PathBuf = {
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        repo.workdir().ok_or("bare repository")?.to_path_buf()
+    };
+
+    let base_commit_oid = git2::Oid::from_str(&base_oid)
+        .map_err(|e| format!("invalid base_oid: {e}"))?;
+    let head_commit_oid = git2::Oid::from_str(&head_oid)
+        .map_err(|e| format!("invalid head_oid: {e}"))?;
+
+    if requested_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4)
+        .min(requested_count);
+    let chunk_size = requested_count.div_ceil(num_threads.max(1));
+    let workdir: &Path = &workdir_path;
+
+    let responses: Vec<FileContentsBatchItem> = std::thread::scope(|s| {
+        let handles: Vec<_> = requests
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(move || -> Vec<FileContentsBatchItem> {
+                    let repo = match Repository::open(workdir) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return chunk
+                                .iter()
+                                .map(|p| FileContentsBatchItem {
+                                    path: p.clone(),
+                                    response: None,
+                                    error: Some(format!("worker repo open failed: {e}")),
+                                })
+                                .collect();
+                        }
+                    };
+                    let base_tree = repo
+                        .find_commit(base_commit_oid)
+                        .ok()
+                        .and_then(|c| c.tree().ok());
+                    let head_tree = repo
+                        .find_commit(head_commit_oid)
+                        .ok()
+                        .and_then(|c| c.tree().ok());
+
+                    let mut out = Vec::with_capacity(chunk.len());
+                    for path in chunk {
+                        let relative_path = Path::new(path);
+                        let result = (|| -> Result<FileContentsResponse, String> {
+                            let old_side = read_tree_file(&repo, base_tree.as_ref(), relative_path)?;
+                            let new_side = read_tree_file(&repo, head_tree.as_ref(), relative_path)?;
+                            Ok(FileContentsResponse {
+                                name: path.clone(),
+                                old_content: old_side.content,
+                                old_binary: old_side.is_binary,
+                                new_content: new_side.content,
+                                new_binary: new_side.is_binary,
+                            })
+                        })();
+                        out.push(match result {
+                            Ok(response) => FileContentsBatchItem {
+                                path: path.clone(),
+                                response: Some(response),
+                                error: None,
+                            },
+                            Err(error) => FileContentsBatchItem {
+                                path: path.clone(),
+                                response: None,
+                                error: Some(error),
+                            },
+                        });
+                    }
+                    out
+                })
+            })
+            .collect();
+
+        let mut all = Vec::with_capacity(requested_count);
+        for handle in handles {
+            if let Ok(chunk) = handle.join() {
+                all.extend(chunk);
+            }
+        }
+        all
+    });
 
     Ok(responses)
 }
@@ -1420,7 +1670,9 @@ pub struct BranchInfo {
     pub is_current: bool,
 }
 
-/// List local branches in the currently open repository, sorted alphabetically.
+/// List local branches in the currently open repository, sorted by the
+/// committer time of each branch's tip (most recent first). Branches whose
+/// tip cannot be resolved fall to the bottom.
 /// `is_current` is true for the branch HEAD currently points at (if any).
 #[tauri::command]
 pub fn list_branches(state: State<AppState>) -> Result<Vec<BranchInfo>, String> {
@@ -1433,17 +1685,22 @@ pub fn list_branches(state: State<AppState>) -> Result<Vec<BranchInfo>, String> 
     let branches = repo
         .branches(Some(BranchType::Local))
         .map_err(|e| format!("branches: {e}"))?;
-    let mut out: Vec<BranchInfo> = Vec::new();
+    let mut out: Vec<(BranchInfo, i64)> = Vec::new();
     for entry in branches {
         let (branch, _) = entry.map_err(|e| format!("branch entry: {e}"))?;
         if let Ok(Some(name)) = branch.name() {
             let name = name.to_string();
             let is_current = head_name.as_deref() == Some(name.as_str());
-            out.push(BranchInfo { name, is_current });
+            let when = branch
+                .get()
+                .peel_to_commit()
+                .map(|c| c.time().seconds())
+                .unwrap_or(i64::MIN);
+            out.push((BranchInfo { name, is_current }, when));
         }
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
+    Ok(out.into_iter().map(|(b, _)| b).collect())
 }
 
 /// Switch the currently open repository to a local branch. Refuses to clobber
@@ -1456,15 +1713,117 @@ pub fn checkout_branch(
 ) -> Result<(), String> {
     let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let repo = lock.as_ref().ok_or("no repository open")?;
+
+    // Force a fresh read of `.git/index` into the cached in-memory index before
+    // checkout. `state.repo` is held across the app's lifetime and external git
+    // operations (terminal `git pull`, `git commit`, etc.) routinely leave the
+    // cached index stale. libgit2's checkout does call `git_index_read_safely`
+    // internally, but it bails on mtime equality — a same-second external
+    // write can slip past it. Forcing `read(true)` guarantees the baseline
+    // libgit2 uses to decide "is this file locally modified" matches reality.
+    if let Ok(mut idx) = repo.index() {
+        let _ = idx.read(true);
+    }
+
+    // Capture the original HEAD's tree so we can roll back the workdir+index if
+    // `set_head` fails *after* `checkout_tree` has already written them.
+    // libgit2 refuses to set HEAD to a branch checked out in a linked worktree
+    // ("current HEAD of a linked repository"), but only after `checkout_tree`
+    // has happily updated the workdir and index to the new branch's tree — the
+    // exact "phantom staged changes" symptom users see.
+    let original_head_tree_oid = repo
+        .head()
+        .ok()
+        .and_then(|r| r.peel_to_commit().ok())
+        .and_then(|c| c.tree().ok())
+        .map(|t| t.id());
+
     let refname = format!("refs/heads/{name}");
     let obj = repo
         .revparse_single(&refname)
         .map_err(|e| format!("branch not found: {e}"))?;
+    let target_tree_oid = obj
+        .peel_to_commit()
+        .and_then(|c| c.tree())
+        .map(|t| t.id())
+        .map_err(|e| format!("peel target tree: {e}"))?;
+
     let mut co = CheckoutBuilder::new();
     repo.checkout_tree(&obj, Some(&mut co))
         .map_err(|e| format!("checkout failed: {e}"))?;
-    repo.set_head(&refname)
-        .map_err(|e| format!("set_head failed: {e}"))?;
+    if let Err(set_head_err) = repo.set_head(&refname) {
+        // checkout_tree succeeded → workdir+index are at the target tree, but
+        // HEAD was never moved. Roll back the workdir+index to the original
+        // HEAD's tree so the user is left exactly where they started instead
+        // of with an index that doesn't match HEAD.
+        let rollback_status = match original_head_tree_oid
+            .and_then(|oid| repo.find_tree(oid).ok())
+        {
+            Some(tree) => {
+                let mut rollback_co = CheckoutBuilder::new();
+                rollback_co.force();
+                match repo.checkout_tree(tree.as_object(), Some(&mut rollback_co)) {
+                    Ok(()) => "rolled_back".to_string(),
+                    Err(e) => format!("ROLLBACK_FAILED: {e}"),
+                }
+            }
+            None => "ROLLBACK_SKIPPED_NO_ORIGINAL_TREE".to_string(),
+        };
+
+        perf_event(
+            &app,
+            "checkout_branch:set_head_failed",
+            json!({
+                "branch": &name,
+                "setHeadError": set_head_err.message(),
+                "rollback": &rollback_status,
+            }),
+        );
+
+        // Translate libgit2's cryptic "current HEAD of a linked repository"
+        // error into something the user can act on.
+        let raw_msg = set_head_err.message();
+        let user_msg = if raw_msg.contains("current HEAD of a linked repository") {
+            format!(
+                "'{name}' is already checked out in another worktree; close it there before switching"
+            )
+        } else {
+            format!("set_head failed: {set_head_err}")
+        };
+        return Err(user_msg);
+    }
+
+    // Verify the post-condition: `.git/index`'s tree OID equals the branch
+    // tip's tree OID. Anything else means libgit2's SAFE checkout merged or
+    // skipped files in a way that left the index out of sync with HEAD — the
+    // exact symptom of the user-reported branch-diff index-corruption bug.
+    // Re-derive `index_tree` from a fresh re-read so we measure on-disk truth,
+    // not the cached in-memory copy that libgit2 just wrote from.
+    if let Ok(mut idx) = repo.index() {
+        let _ = idx.read(true);
+        match idx.write_tree() {
+            Ok(written) if written != target_tree_oid => {
+                perf_event(
+                    &app,
+                    "checkout_branch:index_mismatch",
+                    json!({
+                        "branch": &name,
+                        "expectedTreeOid": target_tree_oid.to_string(),
+                        "actualTreeOid": written.to_string(),
+                    }),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                perf_event(
+                    &app,
+                    "checkout_branch:write_tree_failed",
+                    json!({ "branch": &name, "error": e.to_string() }),
+                );
+            }
+        }
+    }
+
     // Branch switches do not always trigger fs events the watcher notices in
     // time, so kick a refresh explicitly.
     let _ = app.emit("repo:changed", json!({}));

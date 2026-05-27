@@ -64,6 +64,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
             git::get_repo_status,
+            git::get_branch_diff,
+            git::get_branch_file_contents_batch,
             git::get_file_contents_batch,
             git::stage_file,
             git::unstage_file,

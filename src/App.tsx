@@ -15,6 +15,7 @@ import {
   useRepoStatus,
 } from "@/hooks/use-repo-status";
 import { useDiffs } from "@/hooks/use-diffs";
+import { useBranchDiff } from "@/hooks/use-branch-diff";
 import { useComments } from "@/hooks/use-comments";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -56,6 +57,25 @@ function App() {
   const [scrollToPath, setScrollToPath] = useState<string | null>(null);
   const [scrollNonce, setScrollNonce] = useState(0);
   const [submittingReview, setSubmittingReview] = useState(false);
+  const [branchDiffActive, setBranchDiffActive] = useState(false);
+  const branchDiff = useBranchDiff(branchDiffActive, workdir);
+
+  useEffect(() => {
+    setBranchDiffActive(false);
+  }, [workdir]);
+
+  useEffect(() => {
+    if (!branchDiffActive || !branchDiff.resolved) return;
+    if (branchDiff.error) {
+      toast.error(`Branch diff failed: ${branchDiff.error}`);
+      setBranchDiffActive(false);
+      return;
+    }
+    if (!branchDiff.meta) {
+      toast.error("No base branch found (tried origin/HEAD, main, master, trunk)");
+      setBranchDiffActive(false);
+    }
+  }, [branchDiffActive, branchDiff.resolved, branchDiff.error, branchDiff.meta]);
   const [optimisticStage, setOptimisticStage] = useState<Map<string, boolean>>(
     new Map(),
   );
@@ -242,6 +262,16 @@ function App() {
     }
     return files;
   }, [status]);
+
+  const branchDiffTotals = useMemo(() => {
+    let additions = 0;
+    let deletions = 0;
+    for (const f of branchDiff.files) {
+      additions += f.additions;
+      deletions += f.deletions;
+    }
+    return { additions, deletions };
+  }, [branchDiff.files]);
 
   const handleToggleExpandAll = useCallback(() => {
     setAllExpanded((v) => !v);
@@ -447,6 +477,22 @@ function App() {
     );
   }
 
+  const diffPanelFiles = branchDiffActive ? branchDiff.files : allFiles;
+  const diffPanelDiffs = branchDiffActive ? branchDiff.diffs : diffs;
+  const diffPanelLoading = branchDiffActive ? branchDiff.loading : loading;
+  const workingChangesCount = (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0);
+  const branchInfo = branchDiffActive && branchDiff.meta
+    ? {
+        baseRef: branchDiff.meta.base_ref,
+        additions: branchDiffTotals.additions,
+        deletions: branchDiffTotals.deletions,
+        onBack: () => setBranchDiffActive(false),
+      }
+    : undefined;
+  const workingChangesNotice = branchDiffActive && workingChangesCount > 0
+    ? { count: workingChangesCount, onBack: () => setBranchDiffActive(false) }
+    : undefined;
+
   return (
     <>
       <div className="flex h-full flex-col">
@@ -455,27 +501,41 @@ function App() {
         className="flex-1 min-h-0 isolate border-t border-border bg-background"
       >
         <ResizablePanel defaultSize="25%" minSize={300} maxSize={400}>
-          <Sidebar
-            workdir={workdir}
-            staged={stagedView}
-            unstaged={unstagedView}
-            stagedPaths={stagedPaths}
-            selectedFile={scrollToPath}
-            onSelectFile={handleSelectFile}
-            onToggleStage={handleToggleStage}
-            onStageAll={handleStageAll}
-            onUnstageAll={handleUnstageAll}
-            onCommit={handleCommit}
-            onCloseRepo={close}
-            onDiscardFile={handleDiscardFile}
-          />
+          {branchDiffActive ? (
+            <Sidebar
+              mode="branch"
+              workdir={workdir}
+              branchFiles={branchDiff.files}
+              baseRef={branchDiff.meta?.base_ref ?? ""}
+              selectedFile={scrollToPath}
+              onSelectFile={handleSelectFile}
+              onCloseRepo={close}
+            />
+          ) : (
+            <Sidebar
+              mode="working"
+              workdir={workdir}
+              staged={stagedView}
+              unstaged={unstagedView}
+              stagedPaths={stagedPaths}
+              selectedFile={scrollToPath}
+              onSelectFile={handleSelectFile}
+              onToggleStage={handleToggleStage}
+              onStageAll={handleStageAll}
+              onUnstageAll={handleUnstageAll}
+              onCommit={handleCommit}
+              onCloseRepo={close}
+              onDiscardFile={handleDiscardFile}
+              onViewBranchDiff={() => setBranchDiffActive(true)}
+            />
+          )}
         </ResizablePanel>
         <ResizableHandle />
         <ResizablePanel defaultSize="78%">
           <DiffPanel
-            files={allFiles}
-            diffs={diffs}
-            loading={loading}
+            files={diffPanelFiles}
+            diffs={diffPanelDiffs}
+            loading={diffPanelLoading}
             diffStyle={diffStyle}
             onDiffStyleChange={setDiffStyle}
             allExpanded={allExpanded}
@@ -495,6 +555,8 @@ function App() {
             onSubmitReview={handleSubmitReview}
             onClearResolved={comments.clearResolved}
             submittingReview={submittingReview}
+            branchInfo={branchInfo}
+            workingChangesNotice={workingChangesNotice}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

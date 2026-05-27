@@ -7,9 +7,9 @@ interface SidebarContextMenuProps {
   item: ContextMenuItem;
   context: ContextMenuOpenContext;
   isStaged: boolean;
-  onStage: (path: string) => void;
-  onUnstage: (path: string) => void;
-  onDiscard: (path: string) => void;
+  onStage?: (path: string) => void;
+  onUnstage?: (path: string) => void;
+  onDiscard?: (path: string) => void;
   onCopyPath: (path: string) => void;
   onRevealInFinder: (path: string) => void;
 }
@@ -49,6 +49,11 @@ export function SidebarContextMenu({
   onCopyPath,
   onRevealInFinder,
 }: SidebarContextMenuProps) {
+  const showStage = !isStaged && onStage;
+  const showUnstage = isStaged && onUnstage;
+  const showDiscard = !!onDiscard;
+  const showSeparator = showStage || showUnstage || showDiscard;
+
   return (
     <MenuPrimitive.Root
       open
@@ -80,12 +85,16 @@ export function SidebarContextMenu({
               "z-50 min-w-40 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none",
             )}
           >
-            {!isStaged && <Item onClick={() => onStage(item.path)}>Stage</Item>}
-            {isStaged && (
-              <Item onClick={() => onUnstage(item.path)}>Unstage</Item>
+            {showStage && (
+              <Item onClick={() => onStage!(item.path)}>Stage</Item>
             )}
-            <Item onClick={() => onDiscard(item.path)}>Discard changes</Item>
-            <Separator />
+            {showUnstage && (
+              <Item onClick={() => onUnstage!(item.path)}>Unstage</Item>
+            )}
+            {showDiscard && (
+              <Item onClick={() => onDiscard!(item.path)}>Discard changes</Item>
+            )}
+            {showSeparator && <Separator />}
             <Item onClick={() => onCopyPath(item.path)}>Copy path</Item>
             <Item onClick={() => onRevealInFinder(item.path)}>
               Reveal in Finder

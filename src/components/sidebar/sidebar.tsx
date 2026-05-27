@@ -15,7 +15,8 @@ import { join } from "@tauri-apps/api/path";
 import { IconArrowLeft } from "@tabler/icons-react";
 import { perfTimed } from "@/lib/perf";
 
-interface SidebarProps {
+interface SidebarWorkingProps {
+  mode: "working";
   workdir: string | null;
   staged: FileEntry[];
   unstaged: FileEntry[];
@@ -28,7 +29,20 @@ interface SidebarProps {
   onCommit: (message: string, options?: CommitOptions) => void;
   onCloseRepo: () => void;
   onDiscardFile: (path: string) => void;
+  onViewBranchDiff: () => void;
 }
+
+interface SidebarBranchProps {
+  mode: "branch";
+  workdir: string | null;
+  branchFiles: FileEntry[];
+  baseRef: string;
+  selectedFile: string | null;
+  onSelectFile: (path: string) => void;
+  onCloseRepo: () => void;
+}
+
+export type SidebarProps = SidebarWorkingProps | SidebarBranchProps;
 
 const treeStyle: CSSProperties = {
   colorScheme: "dark",
@@ -43,6 +57,8 @@ const treeStyle: CSSProperties = {
   "--trees-item-margin-x-override": "0px",
   height: "100%",
 } as CSSProperties;
+
+const EMPTY_STAGED_PATHS: Set<string> = new Set();
 
 function mapKind(kind: ChangeKind): GitStatus {
   switch (kind) {
@@ -59,7 +75,12 @@ function mapKind(kind: ChangeKind): GitStatus {
   }
 }
 
-export function Sidebar({
+export function Sidebar(props: SidebarProps) {
+  if (props.mode === "branch") return <SidebarBranch {...props} />;
+  return <SidebarWorking {...props} />;
+}
+
+function SidebarWorking({
   workdir,
   staged,
   unstaged,
@@ -71,7 +92,8 @@ export function Sidebar({
   onCommit,
   onCloseRepo,
   onDiscardFile,
-}: SidebarProps) {
+  onViewBranchDiff,
+}: SidebarWorkingProps) {
   const hasChanges = staged.length > 0 || unstaged.length > 0;
   const totalCount = staged.length + unstaged.length;
 
@@ -97,7 +119,12 @@ export function Sidebar({
 
       <div className="flex min-h-0 flex-1 flex-col">
         {!hasChanges && (
-          <p className="px-3 py-4 text-xs text-muted-foreground">No changes</p>
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+            <p className="text-xs text-muted-foreground">No changes</p>
+            <Button variant="outline" size="sm" onClick={onViewBranchDiff}>
+              View Branch Diff
+            </Button>
+          </div>
         )}
 
         {staged.length > 0 && (
@@ -135,16 +162,65 @@ export function Sidebar({
   );
 }
 
+function SidebarBranch({
+  workdir,
+  branchFiles,
+  baseRef,
+  onSelectFile,
+  onCloseRepo,
+}: SidebarBranchProps) {
+  return (
+    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-r border-border bg-sidebar">
+      <div className="flex h-10 items-center gap-1 border-b border-border px-1.5">
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={onCloseRepo}
+          aria-label="Back to onboarding"
+          title="Open a different repository"
+        >
+          <IconArrowLeft />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-sidebar-foreground">
+            {workdir?.replace(/\/+$/, "").split("/").pop() ?? "No repository"}
+          </p>
+        </div>
+        <p className="shrink-0 pr-1 text-xs tabular-nums text-muted-foreground">
+          {branchFiles.length} file{branchFiles.length === 1 ? "" : "s"}
+        </p>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col">
+        {branchFiles.length === 0 ? (
+          <p className="px-3 py-4 text-xs text-muted-foreground">
+            No changes since {baseRef}
+          </p>
+        ) : (
+          <Section
+            label={`Branch changes \u2014 ${branchFiles.length} file${branchFiles.length === 1 ? "" : "s"}`}
+            files={branchFiles}
+            treeId="cub-branch-tree"
+            stagedPaths={EMPTY_STAGED_PATHS}
+            onSelectFile={onSelectFile}
+            workdir={workdir}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface SectionProps {
   label: string;
   files: FileEntry[];
   treeId: string;
   stagedPaths: Set<string>;
-  actionLabel: string;
-  onAction: () => void;
+  actionLabel?: string;
+  onAction?: () => void;
   onSelectFile: (path: string) => void;
-  onToggleStage: (path: string) => void;
-  onDiscardFile: (path: string) => void;
+  onToggleStage?: (path: string) => void;
+  onDiscardFile?: (path: string) => void;
   workdir: string | null;
 }
 
@@ -241,14 +317,16 @@ function Section({
         <span className="text-xs font-medium text-muted-foreground">
           {label} <span className="text-[10px]">({files.length})</span>
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-5 px-1.5 text-[10px]"
-          onClick={onAction}
-        >
-          {actionLabel}
-        </Button>
+        {actionLabel && onAction && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-5 px-1.5 text-[10px]"
+            onClick={onAction}
+          >
+            {actionLabel}
+          </Button>
+        )}
       </div>
       <div ref={treeWrapperRef} className="min-h-0 flex-1">
         <FileTree
@@ -259,18 +337,30 @@ function Section({
               item={item}
               context={context}
               isStaged={stagedPaths.has(item.path)}
-              onStage={(p) => {
-                context.close();
-                onToggleStage(p);
-              }}
-              onUnstage={(p) => {
-                context.close();
-                onToggleStage(p);
-              }}
-              onDiscard={(p) => {
-                context.close();
-                onDiscardFile(p);
-              }}
+              onStage={
+                onToggleStage
+                  ? (p) => {
+                      context.close();
+                      onToggleStage(p);
+                    }
+                  : undefined
+              }
+              onUnstage={
+                onToggleStage
+                  ? (p) => {
+                      context.close();
+                      onToggleStage(p);
+                    }
+                  : undefined
+              }
+              onDiscard={
+                onDiscardFile
+                  ? (p) => {
+                      context.close();
+                      onDiscardFile(p);
+                    }
+                  : undefined
+              }
               onCopyPath={(p) => {
                 context.close();
                 navigator.clipboard.writeText(p).catch(() => {});

@@ -152,3 +152,26 @@ export function listBranches(): Promise<BranchInfo[]> {
 export function checkoutBranch(name: string): Promise<void> {
   return invoke<void>("checkout_branch", { name });
 }
+
+export interface BranchDiff {
+  base_ref: string;
+  base_oid: string;
+  head_oid: string;
+  files: FileEntry[];
+}
+
+export function getBranchDiff(): Promise<BranchDiff | null> {
+  return invoke<BranchDiff | null>("get_branch_diff");
+}
+
+export function getBranchFileContentsBatch(args: {
+  baseOid: string;
+  headOid: string;
+  requests: string[];
+}): Promise<FileContentsBatchItem[]> {
+  return invoke<FileContentsBatchItem[]>("get_branch_file_contents_batch", {
+    baseOid: args.baseOid,
+    headOid: args.headOid,
+    requests: args.requests,
+  });
+}

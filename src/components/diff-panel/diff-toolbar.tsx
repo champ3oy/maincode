@@ -1,11 +1,20 @@
 import { Button } from "@/components/ui/button";
 import {
-  IconFold,
+  IconArrowLeft,
   IconArrowsVertical,
   IconCheck,
+  IconFold,
   IconLayoutColumns,
   IconLayoutRows,
 } from "@tabler/icons-react";
+import { DIFF_ADDITION_COLOR, DIFF_DELETION_COLOR } from "@/lib/status";
+
+interface BranchInfo {
+  baseRef: string;
+  additions: number;
+  deletions: number;
+  onBack: () => void;
+}
 
 interface DiffToolbarProps {
   diffStyle: "unified" | "split";
@@ -19,6 +28,7 @@ interface DiffToolbarProps {
   onSubmitReview: () => void;
   onClearResolved: () => void;
   submittingReview: boolean;
+  branchInfo?: BranchInfo;
 }
 
 function StatusSummary({
@@ -54,15 +64,47 @@ export function DiffToolbar({
   onSubmitReview,
   onClearResolved,
   submittingReview,
+  branchInfo,
 }: DiffToolbarProps) {
   return (
-    <div className="sticky top-0 z-10 flex h-10 items-center justify-between border-b border-border bg-background px-3">
-      <StatusSummary
-        pending={pendingCount}
-        acknowledged={acknowledgedCount}
-        resolved={resolvedCount}
-      />
-      <div className="ml-auto flex items-center gap-1.5">
+    <div className="sticky top-0 z-10 flex h-10 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
+      {branchInfo ? (
+        <>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={branchInfo.onBack}
+            aria-label="Back to changes"
+            title="Back to changes"
+          >
+            <IconArrowLeft className="size-3.5" />
+          </Button>
+          <p className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            Changes since {branchInfo.baseRef}
+          </p>
+          {(branchInfo.additions > 0 || branchInfo.deletions > 0) && (
+            <div className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+              {branchInfo.additions > 0 && (
+                <span className={DIFF_ADDITION_COLOR}>
+                  +{branchInfo.additions}
+                </span>
+              )}
+              {branchInfo.deletions > 0 && (
+                <span className={DIFF_DELETION_COLOR}>
+                  −{branchInfo.deletions}
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <StatusSummary
+          pending={pendingCount}
+          acknowledged={acknowledgedCount}
+          resolved={resolvedCount}
+        />
+      )}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {resolvedCount > 0 && (
           <Button
             variant="ghost"

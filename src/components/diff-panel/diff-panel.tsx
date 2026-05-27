@@ -83,6 +83,16 @@ interface DiffPanelProps {
   onSubmitReview: () => void;
   onClearResolved: () => void;
   submittingReview: boolean;
+  branchInfo?: {
+    baseRef: string;
+    additions: number;
+    deletions: number;
+    onBack: () => void;
+  };
+  workingChangesNotice?: {
+    count: number;
+    onBack: () => void;
+  };
 }
 
 const EMPTY_ANNOTATIONS: DiffLineAnnotation<CommentMetadata>[] = [];
@@ -157,6 +167,8 @@ export function DiffPanel({
   onSubmitReview,
   onClearResolved,
   submittingReview,
+  branchInfo,
+  workingChangesNotice,
 }: DiffPanelProps) {
   const { resolvedTheme } = useTheme();
   const themeType: "light" | "dark" =
@@ -589,7 +601,22 @@ export function DiffPanel({
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden overscroll-contain bg-background [contain:strict]">
-      {initialItems.length > 0 && (
+      {workingChangesNotice && workingChangesNotice.count > 0 && (
+        <button
+          type="button"
+          onClick={workingChangesNotice.onBack}
+          className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-3 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+        >
+          <span className="truncate">
+            {workingChangesNotice.count} working change
+            {workingChangesNotice.count === 1 ? "" : "s"} waiting
+          </span>
+          <span className="ml-auto shrink-0 text-foreground">
+            Back to changes
+          </span>
+        </button>
+      )}
+      {(initialItems.length > 0 || branchInfo) && (
         <DiffToolbar
           diffStyle={diffStyle}
           onDiffStyleChange={onDiffStyleChange}
@@ -602,11 +629,16 @@ export function DiffPanel({
           onSubmitReview={onSubmitReview}
           onClearResolved={onClearResolved}
           submittingReview={submittingReview}
+          branchInfo={branchInfo}
         />
       )}
       {initialItems.length === 0 ? (
         <div className="flex h-full items-center justify-center">
-          <p className="text-sm text-muted-foreground">No changes to review</p>
+          <p className="text-sm text-muted-foreground">
+            {branchInfo
+              ? `No changes since ${branchInfo.baseRef}`
+              : "No changes to review"}
+          </p>
         </div>
       ) : !workerPoolReady ? (
         <div className="flex h-full items-center justify-center">
