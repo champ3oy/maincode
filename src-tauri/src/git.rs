@@ -38,6 +38,8 @@ pub struct AppState {
     pub clone_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub watcher: Mutex<Option<crate::watcher::RepoWatcher>>,
     pub watcher_generation: AtomicU64,
+    pub walker_generation: Arc<AtomicU64>,
+    pub walker_cancel: Arc<AtomicBool>,
 }
 
 fn restart_watcher(app: &AppHandle, state: &AppState, workdir: &Path) {
@@ -1828,4 +1830,572 @@ pub fn checkout_branch(
     // time, so kick a refresh explicitly.
     let _ = app.emit("repo:changed", json!({}));
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// History tab support: HEAD probe, commit details, commit diff, root-commit
+// file contents, and a streaming revwalk that emits commit-graph chunks.
+// ---------------------------------------------------------------------------
+
+const GRAPH_CHUNK_SIZE: usize = 1000;
+
+#[derive(Serialize)]
+pub struct HeadState {
+    pub branch: Option<String>,
+    pub head_oid: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CommitDetails {
+    pub oid: String,
+    pub subject: String,
+    pub body: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_timestamp: i64,
+    pub committer_name: String,
+    pub committer_email: String,
+    pub committer_timestamp: i64,
+}
+
+#[derive(Serialize)]
+pub struct CommitDiff {
+    pub parent_oid: Option<String>,
+    pub files: Vec<FileEntry>,
+}
+
+#[derive(Serialize)]
+pub struct ListCommitsStreamAck {
+    pub request_id: String,
+    pub total_estimate: Option<u64>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CommitGraphRow {
+    pub oid: String,
+    pub parents: Vec<String>,
+    pub refs: Vec<String>,
+}
+
+#[tauri::command]
+pub fn get_head_state(state: State<AppState>) -> Result<HeadState, String> {
+    let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let repo = lock.as_ref().ok_or("no repository open")?;
+
+    let head = repo
+        .head()
+        .map_err(|e| format!("failed to read HEAD: {e}"))?;
+    let branch = if head.is_branch() {
+        head.shorthand().map(str::to_owned)
+    } else {
+        None
+    };
+    let head_oid = head
+        .peel_to_commit()
+        .map_err(|e| format!("failed to peel HEAD: {e}"))?
+        .id()
+        .to_string();
+
+    Ok(HeadState { branch, head_oid })
+}
+
+#[tauri::command]
+pub fn get_commit_details_batch(
+    oids: Vec<String>,
+    state: State<AppState>,
+) -> Result<Vec<CommitDetails>, String> {
+    let requested_count = oids.len();
+    let workdir_path: PathBuf = {
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        repo.workdir().ok_or("bare repository")?.to_path_buf()
+    };
+
+    if requested_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4)
+        .min(requested_count);
+    let chunk_size = requested_count.div_ceil(num_threads.max(1));
+    let workdir: &Path = &workdir_path;
+
+    let details: Vec<CommitDetails> = std::thread::scope(|s| {
+        let handles: Vec<_> = oids
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(move || -> Vec<CommitDetails> {
+                    let Ok(repo) = Repository::open(workdir) else {
+                        return Vec::new();
+                    };
+                    let mut out = Vec::with_capacity(chunk.len());
+                    for oid_str in chunk {
+                        let Ok(oid) = git2::Oid::from_str(oid_str) else {
+                            continue;
+                        };
+                        let Ok(commit) = repo.find_commit(oid) else {
+                            continue;
+                        };
+                        let message_bytes = commit.message_bytes();
+                        let message = String::from_utf8_lossy(message_bytes);
+                        let (subject, body) = match message.split_once('\n') {
+                            Some((s, rest)) => (s.to_owned(), rest.trim_end().to_owned()),
+                            None => (message.trim_end().to_owned(), String::new()),
+                        };
+                        let author = commit.author();
+                        let committer = commit.committer();
+                        out.push(CommitDetails {
+                            oid: oid.to_string(),
+                            subject,
+                            body,
+                            author_name: String::from_utf8_lossy(author.name_bytes()).into_owned(),
+                            author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
+                            author_timestamp: author.when().seconds() as i64,
+                            committer_name: String::from_utf8_lossy(committer.name_bytes()).into_owned(),
+                            committer_email: String::from_utf8_lossy(committer.email_bytes()).into_owned(),
+                            committer_timestamp: committer.when().seconds() as i64,
+                        });
+                    }
+                    out
+                })
+            })
+            .collect();
+
+        let mut all = Vec::with_capacity(requested_count);
+        for handle in handles {
+            if let Ok(chunk) = handle.join() {
+                all.extend(chunk);
+            }
+        }
+        all
+    });
+
+    Ok(details)
+}
+
+#[tauri::command]
+pub fn get_commit_diff(oid: String, state: State<AppState>) -> Result<CommitDiff, String> {
+    let commit_oid = git2::Oid::from_str(&oid).map_err(|e| format!("invalid oid: {e}"))?;
+
+    let workdir_path: PathBuf;
+    let parent_oid_opt: Option<git2::Oid>;
+    let parent_tree_oid_opt: Option<git2::Oid>;
+    let commit_tree_oid: git2::Oid;
+    let status_entries: Vec<(String, ChangeKind)>;
+    let delta_count: usize;
+    let root_line_counts: Option<HashMap<String, (u32, u32)>>;
+
+    {
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
+
+        let commit = repo
+            .find_commit(commit_oid)
+            .map_err(|e| format!("failed to find commit: {e}"))?;
+        let commit_tree = commit
+            .tree()
+            .map_err(|e| format!("failed to get commit tree: {e}"))?;
+
+        let (parent_oid, parent_tree) = if commit.parent_count() == 0 {
+            (None, None)
+        } else {
+            let parent = commit
+                .parent(0)
+                .map_err(|e| format!("failed to get parent: {e}"))?;
+            let parent_tree = parent
+                .tree()
+                .map_err(|e| format!("failed to get parent tree: {e}"))?;
+            (Some(parent.id()), Some(parent_tree))
+        };
+
+        let diff = repo
+            .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
+            .map_err(|e| format!("failed to diff trees: {e}"))?;
+
+        let mut entries: Vec<(String, ChangeKind)> = Vec::new();
+        for delta in diff.deltas() {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .and_then(|p| p.to_str())
+                .map(str::to_owned);
+            let Some(path) = path else { continue };
+            let kind = match delta.status() {
+                git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => ChangeKind::Added,
+                git2::Delta::Deleted => ChangeKind::Deleted,
+                git2::Delta::Renamed => ChangeKind::Renamed,
+                git2::Delta::Typechange => ChangeKind::Typechange,
+                _ => ChangeKind::Modified,
+            };
+            entries.push((path, kind));
+        }
+
+        delta_count = entries.len();
+        status_entries = entries;
+        commit_tree_oid = commit_tree.id();
+        parent_tree_oid_opt = parent_tree.as_ref().map(|t| t.id());
+        parent_oid_opt = parent_oid;
+
+        // Root commits have no parent tree, so `count_diff_lines_parallel`'s
+        // `TwoTrees` variant cannot represent the (None, commit_tree) diff.
+        // TODO: extend CountDiffKind to handle a None base tree; for now sum
+        // `Patch::from_diff` line stats on this thread. Root commits are rare
+        // and the file set is bounded by the initial commit size.
+        if parent_tree_oid_opt.is_none() {
+            let mut counts: HashMap<String, (u32, u32)> = HashMap::with_capacity(delta_count);
+            for (idx, (path, _)) in status_entries.iter().enumerate() {
+                let Ok(Some(patch)) = Patch::from_diff(&diff, idx) else {
+                    continue;
+                };
+                let Ok((_, adds, dels)) = patch.line_stats() else {
+                    continue;
+                };
+                counts.insert(
+                    path.clone(),
+                    (
+                        u32::try_from(adds).unwrap_or(u32::MAX),
+                        u32::try_from(dels).unwrap_or(u32::MAX),
+                    ),
+                );
+            }
+            root_line_counts = Some(counts);
+        } else {
+            root_line_counts = None;
+        }
+    }
+
+    let counts = match (parent_tree_oid_opt, root_line_counts) {
+        (Some(parent_tree_oid), _) => count_diff_lines_parallel(
+            &workdir_path,
+            CountDiffKind::TwoTrees(parent_tree_oid, commit_tree_oid),
+            delta_count,
+        ),
+        (None, Some(counts)) => counts,
+        (None, None) => HashMap::new(),
+    };
+
+    let files: Vec<FileEntry> = status_entries
+        .into_iter()
+        .map(|(path, kind)| {
+            let (additions, deletions) = counts.get(&path).copied().unwrap_or((0, 0));
+            FileEntry { path, kind, additions, deletions }
+        })
+        .collect();
+
+    Ok(CommitDiff {
+        parent_oid: parent_oid_opt.map(|o| o.to_string()),
+        files,
+    })
+}
+
+#[tauri::command]
+pub fn get_root_commit_file_contents_batch(
+    oid: String,
+    requests: Vec<String>,
+    state: State<AppState>,
+) -> Result<Vec<FileContentsBatchItem>, String> {
+    let commit_oid = git2::Oid::from_str(&oid).map_err(|e| format!("invalid oid: {e}"))?;
+    let requested_count = requests.len();
+    let workdir_path: PathBuf = {
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        repo.workdir().ok_or("bare repository")?.to_path_buf()
+    };
+
+    if requested_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4)
+        .min(requested_count);
+    let chunk_size = requested_count.div_ceil(num_threads.max(1));
+    let workdir: &Path = &workdir_path;
+
+    let responses: Vec<FileContentsBatchItem> = std::thread::scope(|s| {
+        let handles: Vec<_> = requests
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(move || -> Vec<FileContentsBatchItem> {
+                    let repo = match Repository::open(workdir) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return chunk
+                                .iter()
+                                .map(|p| FileContentsBatchItem {
+                                    path: p.clone(),
+                                    response: None,
+                                    error: Some(format!("worker repo open failed: {e}")),
+                                })
+                                .collect();
+                        }
+                    };
+                    let commit_tree = repo
+                        .find_commit(commit_oid)
+                        .ok()
+                        .and_then(|c| c.tree().ok());
+
+                    let mut out = Vec::with_capacity(chunk.len());
+                    for path in chunk {
+                        let relative_path = Path::new(path);
+                        let result = (|| -> Result<FileContentsResponse, String> {
+                            validate_repo_relative_path(relative_path)?;
+                            let new_side =
+                                read_tree_file(&repo, commit_tree.as_ref(), relative_path)?;
+                            Ok(FileContentsResponse {
+                                name: path.clone(),
+                                old_content: None,
+                                old_binary: false,
+                                new_content: new_side.content,
+                                new_binary: new_side.is_binary,
+                            })
+                        })();
+                        out.push(match result {
+                            Ok(response) => FileContentsBatchItem {
+                                path: path.clone(),
+                                response: Some(response),
+                                error: None,
+                            },
+                            Err(error) => FileContentsBatchItem {
+                                path: path.clone(),
+                                response: None,
+                                error: Some(error),
+                            },
+                        });
+                    }
+                    out
+                })
+            })
+            .collect();
+
+        let mut all = Vec::with_capacity(requested_count);
+        for handle in handles {
+            if let Ok(chunk) = handle.join() {
+                all.extend(chunk);
+            }
+        }
+        all
+    });
+
+    Ok(responses)
+}
+
+#[tauri::command]
+pub fn list_commits_stream(
+    branch: Option<String>,
+    request_id: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<ListCommitsStreamAck, String> {
+    let workdir_path: PathBuf;
+    let start_oid: git2::Oid;
+    let ref_map: HashMap<String, Vec<String>>;
+
+    {
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
+
+        // Resolve the start oid: explicit branch wins; otherwise HEAD. If
+        // either fails we emit an error event (or `done` for unborn HEAD).
+        let (resolved_start, missing) = if let Some(name) = branch.as_deref() {
+            match repo.find_branch(name, BranchType::Local) {
+                Ok(b) => match b.get().peel_to_commit() {
+                    Ok(c) => (Some(c.id()), false),
+                    Err(_) => (None, false),
+                },
+                Err(_) => (None, false),
+            }
+        } else {
+            match repo.head() {
+                Ok(h) => match h.peel_to_commit() {
+                    Ok(c) => (Some(c.id()), false),
+                    Err(_) => (None, true),
+                },
+                Err(_) => (None, true),
+            }
+        };
+
+        match resolved_start {
+            Some(oid) => {
+                start_oid = oid;
+            }
+            None if missing => {
+                // Unborn HEAD — emit `done` immediately with no chunks.
+                let _ = app.emit(
+                    "commit-history:done",
+                    json!({ "request_id": request_id }),
+                );
+                return Ok(ListCommitsStreamAck {
+                    request_id,
+                    total_estimate: None,
+                });
+            }
+            None => {
+                let message = match branch.as_deref() {
+                    Some(_) => "branch not found".to_string(),
+                    None => "no HEAD".to_string(),
+                };
+                let _ = app.emit(
+                    "commit-history:error",
+                    json!({ "request_id": request_id, "message": message }),
+                );
+                return Err(message);
+            }
+        }
+
+        // Build oid -> Vec<refname> map. Skip refs we cannot peel.
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+        if let Ok(refs) = repo.references() {
+            for r in refs.flatten() {
+                let Ok(commit) = r.peel_to_commit() else {
+                    continue;
+                };
+                let Some(short) = r.shorthand() else { continue };
+                map.entry(commit.id().to_string())
+                    .or_default()
+                    .push(short.to_owned());
+            }
+        }
+        ref_map = map;
+    }
+
+    // Bump generation and clear cancel so this walker is not preempted.
+    let my_gen = state.walker_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    state.walker_cancel.store(false, Ordering::SeqCst);
+
+    let walker_generation = state.walker_generation.clone();
+    let walker_cancel = state.walker_cancel.clone();
+    let app_thread = app.clone();
+    let request_id_thread = request_id.clone();
+    let workdir_thread = workdir_path.clone();
+
+    std::thread::spawn(move || {
+        let repo = match Repository::open(&workdir_thread) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = app_thread.emit(
+                    "commit-history:error",
+                    json!({
+                        "request_id": request_id_thread,
+                        "message": format!("failed to open repository: {e}"),
+                    }),
+                );
+                return;
+            }
+        };
+
+        let mut walk = match repo.revwalk() {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = app_thread.emit(
+                    "commit-history:error",
+                    json!({
+                        "request_id": request_id_thread,
+                        "message": format!("failed to create revwalk: {e}"),
+                    }),
+                );
+                return;
+            }
+        };
+        if let Err(e) = walk.set_sorting(git2::Sort::TIME) {
+            let _ = app_thread.emit(
+                "commit-history:error",
+                json!({
+                    "request_id": request_id_thread,
+                    "message": format!("failed to set sorting: {e}"),
+                }),
+            );
+            return;
+        }
+        if let Err(e) = walk.push(start_oid) {
+            let _ = app_thread.emit(
+                "commit-history:error",
+                json!({
+                    "request_id": request_id_thread,
+                    "message": format!("failed to push start oid: {e}"),
+                }),
+            );
+            return;
+        }
+
+        let cancelled = |gen_ref: &Arc<AtomicU64>, cancel_ref: &Arc<AtomicBool>| -> bool {
+            cancel_ref.load(Ordering::SeqCst) || gen_ref.load(Ordering::SeqCst) != my_gen
+        };
+
+        let mut buffer: Vec<CommitGraphRow> = Vec::with_capacity(GRAPH_CHUNK_SIZE);
+
+        for oid_result in walk {
+            let oid = match oid_result {
+                Ok(o) => o,
+                Err(e) => {
+                    let _ = app_thread.emit(
+                        "commit-history:error",
+                        json!({
+                            "request_id": request_id_thread,
+                            "message": format!("revwalk error: {e}"),
+                        }),
+                    );
+                    return;
+                }
+            };
+            let commit = match repo.find_commit(oid) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = app_thread.emit(
+                        "commit-history:error",
+                        json!({
+                            "request_id": request_id_thread,
+                            "message": format!("failed to find commit {oid}: {e}"),
+                        }),
+                    );
+                    return;
+                }
+            };
+            let oid_string = oid.to_string();
+            let parents: Vec<String> =
+                commit.parent_ids().map(|p| p.to_string()).collect();
+            let refs = ref_map.get(&oid_string).cloned().unwrap_or_default();
+            buffer.push(CommitGraphRow {
+                oid: oid_string,
+                parents,
+                refs,
+            });
+
+            if buffer.len() >= GRAPH_CHUNK_SIZE {
+                let chunk = std::mem::replace(
+                    &mut buffer,
+                    Vec::with_capacity(GRAPH_CHUNK_SIZE),
+                );
+                let _ = app_thread.emit(
+                    "commit-history:chunk",
+                    json!({ "request_id": request_id_thread, "oids": chunk }),
+                );
+                if cancelled(&walker_generation, &walker_cancel) {
+                    return;
+                }
+            }
+        }
+
+        if !buffer.is_empty() {
+            let _ = app_thread.emit(
+                "commit-history:chunk",
+                json!({ "request_id": request_id_thread, "oids": buffer }),
+            );
+        }
+        let _ = app_thread.emit(
+            "commit-history:done",
+            json!({ "request_id": request_id_thread }),
+        );
+    });
+
+    Ok(ListCommitsStreamAck {
+        request_id,
+        total_estimate: None,
+    })
 }

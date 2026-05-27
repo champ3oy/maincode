@@ -18,6 +18,9 @@ import { useDiffs } from "@/hooks/use-diffs";
 import { useBranchDiff } from "@/hooks/use-branch-diff";
 import { useComments } from "@/hooks/use-comments";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
+import { useCommitDiff } from "@/hooks/use-commit-diff";
+import { useCommitDetailsCache } from "@/hooks/use-commit-details-cache";
+import { CommitDetailHeader } from "@/components/commit-detail/commit-detail-header";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -59,10 +62,26 @@ function App() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [branchDiffActive, setBranchDiffActive] = useState(false);
   const branchDiff = useBranchDiff(branchDiffActive, workdir);
+  const [tab, setTab] = useState<"changes" | "history">("changes");
+  const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
 
   useEffect(() => {
     setBranchDiffActive(false);
+    setTab("changes");
+    setSelectedCommitOid(null);
   }, [workdir]);
+
+  useEffect(() => {
+    if (tab !== "history") setSelectedCommitOid(null);
+  }, [tab]);
+
+  const historyActive = tab === "history" && !branchDiffActive;
+  const commitDiff = useCommitDiff(historyActive ? selectedCommitOid : null);
+  const { cache, requestVisible } = useCommitDetailsCache();
+
+  useEffect(() => {
+    if (historyActive && selectedCommitOid) requestVisible([selectedCommitOid]);
+  }, [historyActive, selectedCommitOid, requestVisible]);
 
   useEffect(() => {
     if (!branchDiffActive || !branchDiff.resolved) return;
@@ -418,6 +437,16 @@ function App() {
     }
   }, [refresh, workdir]);
 
+  const handleTabChange = useCallback(
+    (next: "changes" | "history") => {
+      if (branchDiffActive) {
+        setBranchDiffActive(false);
+      }
+      setTab(next);
+    },
+    [branchDiffActive],
+  );
+
   // Honor `cub [path]` first; otherwise restore the last successfully opened repo.
   const openAndRecord = useCallback(
     async (path: string) => {
@@ -477,21 +506,43 @@ function App() {
     );
   }
 
-  const diffPanelFiles = branchDiffActive ? branchDiff.files : allFiles;
-  const diffPanelDiffs = branchDiffActive ? branchDiff.diffs : diffs;
-  const diffPanelLoading = branchDiffActive ? branchDiff.loading : loading;
-  const workingChangesCount = (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0);
-  const branchInfo = branchDiffActive && branchDiff.meta
-    ? {
-        baseRef: branchDiff.meta.base_ref,
-        additions: branchDiffTotals.additions,
-        deletions: branchDiffTotals.deletions,
-        onBack: () => setBranchDiffActive(false),
-      }
-    : undefined;
-  const workingChangesNotice = branchDiffActive && workingChangesCount > 0
-    ? { count: workingChangesCount, onBack: () => setBranchDiffActive(false) }
-    : undefined;
+  const diffPanelFiles = historyActive
+    ? commitDiff.files
+    : branchDiffActive
+      ? branchDiff.files
+      : allFiles;
+  const diffPanelDiffs = historyActive
+    ? commitDiff.diffs
+    : branchDiffActive
+      ? branchDiff.diffs
+      : diffs;
+  const diffPanelLoading = historyActive
+    ? commitDiff.loading
+    : branchDiffActive
+      ? branchDiff.loading
+      : loading;
+  const workingChangesCount =
+    (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0);
+  const branchInfo =
+    branchDiffActive && branchDiff.meta
+      ? {
+          baseRef: branchDiff.meta.base_ref,
+          additions: branchDiffTotals.additions,
+          deletions: branchDiffTotals.deletions,
+          onBack: () => setBranchDiffActive(false),
+        }
+      : undefined;
+  const workingChangesNotice =
+    branchDiffActive && workingChangesCount > 0
+      ? { count: workingChangesCount, onBack: () => setBranchDiffActive(false) }
+      : undefined;
+  const commitDetailHeader =
+    historyActive && selectedCommitOid ? (
+      <CommitDetailHeader
+        details={cache.get(selectedCommitOid)}
+        oid={selectedCommitOid}
+      />
+    ) : undefined;
 
   return (
     <>
@@ -510,6 +561,21 @@ function App() {
               selectedFile={scrollToPath}
               onSelectFile={handleSelectFile}
               onCloseRepo={close}
+              tab={tab}
+              tabsDisabled
+              hasUncommittedChanges={workingChangesCount > 0}
+              onTabChange={handleTabChange}
+            />
+          ) : tab === "history" ? (
+            <Sidebar
+              mode="history"
+              workdir={workdir}
+              selectedOid={selectedCommitOid}
+              onSelectOid={setSelectedCommitOid}
+              onCloseRepo={close}
+              tab={tab}
+              hasUncommittedChanges={workingChangesCount > 0}
+              onTabChange={handleTabChange}
             />
           ) : (
             <Sidebar
@@ -527,6 +593,9 @@ function App() {
               onCloseRepo={close}
               onDiscardFile={handleDiscardFile}
               onViewBranchDiff={() => setBranchDiffActive(true)}
+              tab={tab}
+              hasUncommittedChanges={workingChangesCount > 0}
+              onTabChange={handleTabChange}
             />
           )}
         </ResizablePanel>
@@ -540,23 +609,31 @@ function App() {
             onDiffStyleChange={setDiffStyle}
             allExpanded={allExpanded}
             onToggleExpandAll={handleToggleExpandAll}
-            scrollToPath={scrollToPath}
-            scrollNonce={scrollNonce}
-            annotationsByFile={comments.annotationsByFile}
-            hasOpenForm={comments.hasOpenForm}
-            totalCommentCount={comments.totalCommentCount}
-            pendingCount={comments.pendingCount}
-            acknowledgedCount={comments.acknowledgedCount}
-            resolvedCount={comments.resolvedCount}
-            onAddAnnotation={comments.addFormAnnotation}
-            onCancelAnnotation={comments.cancelAnnotation}
-            onSubmitAnnotation={comments.submitAnnotation}
-            onDeleteAnnotation={comments.deleteAnnotation}
-            onSubmitReview={handleSubmitReview}
-            onClearResolved={comments.clearResolved}
-            submittingReview={submittingReview}
-            branchInfo={branchInfo}
-            workingChangesNotice={workingChangesNotice}
+            scrollToPath={historyActive ? null : scrollToPath}
+            scrollNonce={historyActive ? 0 : scrollNonce}
+            branchInfo={historyActive ? undefined : branchInfo}
+            workingChangesNotice={
+              historyActive ? undefined : workingChangesNotice
+            }
+            readOnly={historyActive}
+            commitDetailHeader={commitDetailHeader}
+            {...(historyActive
+              ? {}
+              : {
+                  annotationsByFile: comments.annotationsByFile,
+                  hasOpenForm: comments.hasOpenForm,
+                  totalCommentCount: comments.totalCommentCount,
+                  pendingCount: comments.pendingCount,
+                  acknowledgedCount: comments.acknowledgedCount,
+                  resolvedCount: comments.resolvedCount,
+                  onAddAnnotation: comments.addFormAnnotation,
+                  onCancelAnnotation: comments.cancelAnnotation,
+                  onSubmitAnnotation: comments.submitAnnotation,
+                  onDeleteAnnotation: comments.deleteAnnotation,
+                  onSubmitReview: handleSubmitReview,
+                  onClearResolved: comments.clearResolved,
+                  submittingReview: submittingReview,
+                })}
           />
         </ResizablePanel>
       </ResizablePanelGroup>

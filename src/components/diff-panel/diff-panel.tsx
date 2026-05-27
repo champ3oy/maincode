@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useTheme } from "next-themes";
 import {
   CodeView,
@@ -51,38 +58,38 @@ interface DiffPanelProps {
   onToggleExpandAll: () => void;
   scrollToPath: string | null;
   scrollNonce: number;
-  annotationsByFile: Map<string, DiffLineAnnotation<CommentMetadata>[]>;
-  hasOpenForm: boolean;
-  totalCommentCount: number;
-  pendingCount: number;
-  acknowledgedCount: number;
-  resolvedCount: number;
-  onAddAnnotation: (
+  annotationsByFile?: Map<string, DiffLineAnnotation<CommentMetadata>[]>;
+  hasOpenForm?: boolean;
+  totalCommentCount?: number;
+  pendingCount?: number;
+  acknowledgedCount?: number;
+  resolvedCount?: number;
+  onAddAnnotation?: (
     filePath: string,
     side: AnnotationSide,
     lineStart: number,
     lineEnd: number,
   ) => void;
-  onCancelAnnotation: (
+  onCancelAnnotation?: (
     filePath: string,
     side: AnnotationSide,
     lineNumber: number,
   ) => void;
-  onSubmitAnnotation: (
+  onSubmitAnnotation?: (
     filePath: string,
     side: AnnotationSide,
     lineNumber: number,
     text: string,
     actionType: ActionType,
   ) => void;
-  onDeleteAnnotation: (
+  onDeleteAnnotation?: (
     filePath: string,
     side: AnnotationSide,
     lineNumber: number,
   ) => void;
-  onSubmitReview: () => void;
-  onClearResolved: () => void;
-  submittingReview: boolean;
+  onSubmitReview?: () => void;
+  onClearResolved?: () => void;
+  submittingReview?: boolean;
   branchInfo?: {
     baseRef: string;
     additions: number;
@@ -93,9 +100,15 @@ interface DiffPanelProps {
     count: number;
     onBack: () => void;
   };
+  readOnly?: boolean;
+  commitDetailHeader?: ReactNode;
 }
 
 const EMPTY_ANNOTATIONS: DiffLineAnnotation<CommentMetadata>[] = [];
+const EMPTY_ANNOTATIONS_MAP: Map<
+  string,
+  DiffLineAnnotation<CommentMetadata>[]
+> = new Map();
 
 function getBinaryDiffMessage(
   kind: ChangeKind,
@@ -154,21 +167,23 @@ export function DiffPanel({
   onToggleExpandAll,
   scrollToPath,
   scrollNonce,
-  annotationsByFile,
-  hasOpenForm,
-  totalCommentCount,
-  pendingCount,
-  acknowledgedCount,
-  resolvedCount,
+  annotationsByFile = EMPTY_ANNOTATIONS_MAP,
+  hasOpenForm = false,
+  totalCommentCount = 0,
+  pendingCount = 0,
+  acknowledgedCount = 0,
+  resolvedCount = 0,
   onAddAnnotation,
   onCancelAnnotation,
   onSubmitAnnotation,
   onDeleteAnnotation,
   onSubmitReview,
   onClearResolved,
-  submittingReview,
+  submittingReview = false,
   branchInfo,
   workingChangesNotice,
+  readOnly = false,
+  commitDetailHeader,
 }: DiffPanelProps) {
   const { resolvedTheme } = useTheme();
   const themeType: "light" | "dark" =
@@ -357,6 +372,7 @@ export function DiffPanel({
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
+    if (readOnly) return;
     const prev = lastAnnotationsRef.current;
     for (const [path, annotations] of annotationsByFile) {
       if (prev.get(path) === annotations) continue;
@@ -497,6 +513,9 @@ export function DiffPanel({
         | DiffLineAnnotation<CommentMetadata>
         | { lineNumber: number; metadata?: CommentMetadata | undefined },
     ) => {
+      if (readOnly) return null;
+      if (!onSubmitAnnotation || !onCancelAnnotation || !onDeleteAnnotation)
+        return null;
       const meta = (annotation as DiffLineAnnotation<CommentMetadata>).metadata;
       if (!meta) return null;
       if (meta.status === "draft" && !meta.text) {
@@ -530,7 +549,7 @@ export function DiffPanel({
         />
       );
     },
-    [onSubmitAnnotation, onCancelAnnotation, onDeleteAnnotation],
+    [readOnly, onSubmitAnnotation, onCancelAnnotation, onDeleteAnnotation],
   );
 
   // ── CodeView style + options ─────────────────────────────────────
@@ -547,6 +566,7 @@ export function DiffPanel({
 
   const addAnnotationForRange = useCallback(
     (range: SelectedLineRange, id: string) => {
+      if (!onAddAnnotation) return;
       const target = getAnnotationTarget(range);
       onAddAnnotation(id, target.side, target.lineStart, target.lineEnd);
     },
@@ -582,14 +602,16 @@ export function DiffPanel({
       hunkSeparators: "line-info",
       stickyHeaders: true,
       layout: { paddingTop: 0, paddingBottom: 0, gap: 1 },
-      enableLineSelection: !hasOpenForm,
-      enableGutterUtility: !hasOpenForm,
-      onLineSelectionEnd:
-        handleSelectionEnd as CodeViewOptions<CommentMetadata>["onLineSelectionEnd"],
-      onGutterUtilityClick:
-        handleGutterClick as CodeViewOptions<CommentMetadata>["onGutterUtilityClick"],
+      enableLineSelection: !readOnly && !hasOpenForm,
+      enableGutterUtility: !readOnly && !hasOpenForm,
+      onLineSelectionEnd: readOnly
+        ? undefined
+        : (handleSelectionEnd as CodeViewOptions<CommentMetadata>["onLineSelectionEnd"]),
+      onGutterUtilityClick: readOnly
+        ? undefined
+        : (handleGutterClick as CodeViewOptions<CommentMetadata>["onGutterUtilityClick"]),
     };
-  }, [addAnnotationForRange, diffStyle, hasOpenForm, themeType, wrap]);
+  }, [addAnnotationForRange, diffStyle, hasOpenForm, readOnly, themeType, wrap]);
 
   if (loading) {
     return (
@@ -616,7 +638,7 @@ export function DiffPanel({
           </span>
         </button>
       )}
-      {(initialItems.length > 0 || branchInfo) && (
+      {(initialItems.length > 0 || branchInfo || commitDetailHeader) && (
         <DiffToolbar
           diffStyle={diffStyle}
           onDiffStyleChange={onDiffStyleChange}
@@ -630,14 +652,22 @@ export function DiffPanel({
           onClearResolved={onClearResolved}
           submittingReview={submittingReview}
           branchInfo={branchInfo}
+          readOnly={readOnly}
         />
       )}
+      {commitDetailHeader ? (
+        <div className="shrink-0 border-b border-border bg-background">
+          {commitDetailHeader}
+        </div>
+      ) : null}
       {initialItems.length === 0 ? (
         <div className="flex h-full items-center justify-center">
           <p className="text-sm text-muted-foreground">
             {branchInfo
               ? `No changes since ${branchInfo.baseRef}`
-              : "No changes to review"}
+              : commitDetailHeader
+                ? "No file changes in this commit"
+                : "No changes to review"}
           </p>
         </div>
       ) : !workerPoolReady ? (

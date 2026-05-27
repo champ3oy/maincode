@@ -41,6 +41,8 @@ pub fn run() {
             clone_cancels: Mutex::new(HashMap::new()),
             watcher: Mutex::new(None),
             watcher_generation: AtomicU64::new(0),
+            walker_generation: Arc::new(AtomicU64::new(0)),
+            walker_cancel: Arc::new(AtomicBool::new(false)),
         })
         .setup(|app| {
             let state = app.state::<AppState>();
@@ -80,6 +82,11 @@ pub fn run() {
             git::discard_file,
             git::list_branches,
             git::checkout_branch,
+            git::get_head_state,
+            git::get_commit_details_batch,
+            git::get_commit_diff,
+            git::get_root_commit_file_contents_batch,
+            git::list_commits_stream,
             review_bridge::submit_review,
             get_launch_path,
         ])

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
 import {
   FileTree,
   useFileTree,
@@ -13,7 +13,16 @@ import { toast } from "sonner";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { join } from "@tauri-apps/api/path";
 import { IconArrowLeft } from "@tabler/icons-react";
+import { SidebarTabs } from "./sidebar-tabs";
+import { SidebarHistory } from "./sidebar-history";
 import { perfTimed } from "@/lib/perf";
+
+interface SidebarChromeProps {
+  tab: "changes" | "history";
+  tabsDisabled?: boolean;
+  hasUncommittedChanges: boolean;
+  onTabChange: (tab: "changes" | "history") => void;
+}
 
 interface SidebarWorkingProps {
   mode: "working";
@@ -42,7 +51,20 @@ interface SidebarBranchProps {
   onCloseRepo: () => void;
 }
 
-export type SidebarProps = SidebarWorkingProps | SidebarBranchProps;
+interface SidebarHistoryProps {
+  mode: "history";
+  workdir: string | null;
+  selectedOid: string | null;
+  onSelectOid: (oid: string) => void;
+  onCloseRepo: () => void;
+}
+
+export type SidebarProps = (
+  | SidebarWorkingProps
+  | SidebarBranchProps
+  | SidebarHistoryProps
+) &
+  SidebarChromeProps;
 
 const treeStyle: CSSProperties = {
   colorScheme: "dark",
@@ -76,8 +98,36 @@ function mapKind(kind: ChangeKind): GitStatus {
 }
 
 export function Sidebar(props: SidebarProps) {
-  if (props.mode === "branch") return <SidebarBranch {...props} />;
-  return <SidebarWorking {...props} />;
+  let body: ReactNode;
+  switch (props.mode) {
+    case "branch":
+      body = <SidebarBranch {...props} />;
+      break;
+    case "history":
+      body = (
+        <SidebarHistory
+          workdir={props.workdir}
+          selectedOid={props.selectedOid}
+          onSelectOid={props.onSelectOid}
+          onCloseRepo={props.onCloseRepo}
+        />
+      );
+      break;
+    default:
+      body = <SidebarWorking {...props} />;
+      break;
+  }
+  return (
+    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-r border-border bg-sidebar">
+      <SidebarTabs
+        active={props.tab}
+        disabled={props.tabsDisabled}
+        hasUncommittedChanges={props.hasUncommittedChanges}
+        onSelect={props.onTabChange}
+      />
+      <div className="flex min-h-0 flex-1 flex-col">{body}</div>
+    </div>
+  );
 }
 
 function SidebarWorking({
@@ -98,7 +148,7 @@ function SidebarWorking({
   const totalCount = staged.length + unstaged.length;
 
   return (
-    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-r border-border bg-sidebar">
+    <div className="flex h-full w-full min-w-0 flex-col">
       <div className="flex h-10 items-center gap-1 border-b border-border px-1.5">
         <Button
           variant="ghost"
@@ -170,7 +220,7 @@ function SidebarBranch({
   onCloseRepo,
 }: SidebarBranchProps) {
   return (
-    <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-r border-border bg-sidebar">
+    <div className="flex h-full w-full min-w-0 flex-col">
       <div className="flex h-10 items-center gap-1 border-b border-border px-1.5">
         <Button
           variant="ghost"

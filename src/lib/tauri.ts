@@ -175,3 +175,86 @@ export function getBranchFileContentsBatch(args: {
     requests: args.requests,
   });
 }
+
+export const COMMIT_HISTORY_CHUNK_EVENT = "commit-history:chunk";
+export const COMMIT_HISTORY_DONE_EVENT = "commit-history:done";
+export const COMMIT_HISTORY_ERROR_EVENT = "commit-history:error";
+
+export interface HeadState {
+  branch: string | null;
+  head_oid: string;
+}
+
+export interface CommitDetails {
+  oid: string;
+  subject: string;
+  body: string;
+  author_name: string;
+  author_email: string;
+  author_timestamp: number;
+  committer_name: string;
+  committer_email: string;
+  committer_timestamp: number;
+}
+
+export interface CommitDiff {
+  parent_oid: string | null;
+  files: FileEntry[];
+}
+
+export interface CommitGraphRow {
+  oid: string;
+  parents: string[];
+  refs: string[];
+}
+
+export interface ListCommitsStreamAck {
+  request_id: string;
+  total_estimate: number | null;
+}
+
+export interface CommitHistoryChunkPayload {
+  request_id: string;
+  oids: CommitGraphRow[];
+}
+
+export interface CommitHistoryDonePayload {
+  request_id: string;
+}
+
+export interface CommitHistoryErrorPayload {
+  request_id: string;
+  message: string;
+}
+
+export function getHeadState(): Promise<HeadState> {
+  return invoke<HeadState>("get_head_state");
+}
+
+export function getCommitDetailsBatch(oids: string[]): Promise<CommitDetails[]> {
+  return invoke<CommitDetails[]>("get_commit_details_batch", { oids });
+}
+
+export function getCommitDiff(oid: string): Promise<CommitDiff> {
+  return invoke<CommitDiff>("get_commit_diff", { oid });
+}
+
+export function getRootCommitFileContentsBatch(args: {
+  oid: string;
+  requests: string[];
+}): Promise<FileContentsBatchItem[]> {
+  return invoke<FileContentsBatchItem[]>("get_root_commit_file_contents_batch", {
+    oid: args.oid,
+    requests: args.requests,
+  });
+}
+
+export function listCommitsStream(args: {
+  branch: string | null;
+  requestId: string;
+}): Promise<ListCommitsStreamAck> {
+  return invoke<ListCommitsStreamAck>("list_commits_stream", {
+    branch: args.branch,
+    requestId: args.requestId,
+  });
+}
