@@ -1670,7 +1670,9 @@ pub struct BranchInfo {
     pub is_current: bool,
 }
 
-/// List local branches in the currently open repository, sorted alphabetically.
+/// List local branches in the currently open repository, sorted by the
+/// committer time of each branch's tip (most recent first). Branches whose
+/// tip cannot be resolved fall to the bottom.
 /// `is_current` is true for the branch HEAD currently points at (if any).
 #[tauri::command]
 pub fn list_branches(state: State<AppState>) -> Result<Vec<BranchInfo>, String> {
@@ -1683,17 +1685,22 @@ pub fn list_branches(state: State<AppState>) -> Result<Vec<BranchInfo>, String> 
     let branches = repo
         .branches(Some(BranchType::Local))
         .map_err(|e| format!("branches: {e}"))?;
-    let mut out: Vec<BranchInfo> = Vec::new();
+    let mut out: Vec<(BranchInfo, i64)> = Vec::new();
     for entry in branches {
         let (branch, _) = entry.map_err(|e| format!("branch entry: {e}"))?;
         if let Ok(Some(name)) = branch.name() {
             let name = name.to_string();
             let is_current = head_name.as_deref() == Some(name.as_str());
-            out.push(BranchInfo { name, is_current });
+            let when = branch
+                .get()
+                .peel_to_commit()
+                .map(|c| c.time().seconds())
+                .unwrap_or(i64::MIN);
+            out.push((BranchInfo { name, is_current }, when));
         }
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
+    out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name)));
+    Ok(out.into_iter().map(|(b, _)| b).collect())
 }
 
 /// Switch the currently open repository to a local branch. Refuses to clobber
