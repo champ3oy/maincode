@@ -202,10 +202,23 @@ export interface CommitDiff {
   files: FileEntry[];
 }
 
+export interface CommitPatch {
+  parent_oid: string | null;
+  files: FileEntry[];
+  patch: string;
+}
+
 export interface CommitGraphRow {
   oid: string;
   parents: string[];
   refs: string[];
+  subject: string;
+  author_name: string;
+  author_email: string;
+  author_timestamp: number;
+  committer_name: string;
+  committer_email: string;
+  committer_timestamp: number;
 }
 
 export interface ListCommitsStreamAck {
@@ -216,10 +229,12 @@ export interface ListCommitsStreamAck {
 export interface CommitHistoryChunkPayload {
   request_id: string;
   oids: CommitGraphRow[];
+  total_estimate: number | null;
 }
 
 export interface CommitHistoryDonePayload {
   request_id: string;
+  total_estimate: number | null;
 }
 
 export interface CommitHistoryErrorPayload {
@@ -238,6 +253,10 @@ export function getCommitDetailsBatch(oids: string[]): Promise<CommitDetails[]> 
 export function getCommitDiff(oid: string): Promise<CommitDiff> {
   return invoke<CommitDiff>("get_commit_diff", { oid });
 }
+export function getCommitPatch(oid: string): Promise<CommitPatch> {
+  return invoke<CommitPatch>("get_commit_patch", { oid });
+}
+
 
 export function getRootCommitFileContentsBatch(args: {
   oid: string;

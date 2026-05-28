@@ -9,6 +9,8 @@ interface CommitRowProps {
   details: CommitDetails | "pending" | undefined;
   selected: boolean;
   onSelect: (oid: string) => void;
+  onPrefetch?: (oid: string) => void;
+  onCancelPrefetch?: () => void;
 }
 
 function CommitRowImpl({
@@ -16,6 +18,8 @@ function CommitRowImpl({
   details,
   selected,
   onSelect,
+  onPrefetch,
+  onCancelPrefetch,
 }: CommitRowProps) {
   const resolved = details && details !== "pending" ? details : null;
   const subject = resolved?.subject ?? "…";
@@ -34,6 +38,10 @@ function CommitRowImpl({
       role="option"
       aria-selected={selected}
       onClick={() => onSelect(oid)}
+      onPointerEnter={onPrefetch ? () => onPrefetch(oid) : undefined}
+      onPointerLeave={onCancelPrefetch}
+      onFocus={onPrefetch ? () => onPrefetch(oid) : undefined}
+      onBlur={onCancelPrefetch}
       className={cn(
         "flex w-full cursor-pointer flex-col gap-1.5 px-3 py-3 text-left",
         selected

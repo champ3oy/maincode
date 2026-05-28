@@ -15,6 +15,7 @@ import { join } from "@tauri-apps/api/path";
 import { IconArrowLeft } from "@tabler/icons-react";
 import { SidebarTabs } from "./sidebar-tabs";
 import { SidebarHistory } from "./sidebar-history";
+import type { CommitHistoryState } from "@/hooks/use-commit-history";
 import { perfTimed } from "@/lib/perf";
 
 interface SidebarChromeProps {
@@ -22,6 +23,7 @@ interface SidebarChromeProps {
   tabsDisabled?: boolean;
   hasUncommittedChanges: boolean;
   onTabChange: (tab: "changes" | "history") => void;
+  onPrefetchHistory?: () => void;
 }
 
 interface SidebarWorkingProps {
@@ -57,6 +59,8 @@ interface SidebarHistoryProps {
   selectedOid: string | null;
   onSelectOid: (oid: string) => void;
   onCloseRepo: () => void;
+  history: CommitHistoryState;
+  onPrefetchOid: (oid: string) => void;
 }
 
 export type SidebarProps = (
@@ -110,6 +114,8 @@ export function Sidebar(props: SidebarProps) {
           selectedOid={props.selectedOid}
           onSelectOid={props.onSelectOid}
           onCloseRepo={props.onCloseRepo}
+          history={props.history}
+          onPrefetchOid={props.onPrefetchOid}
         />
       );
       break;
@@ -122,6 +128,7 @@ export function Sidebar(props: SidebarProps) {
       <SidebarTabs
         active={props.tab}
         disabled={props.tabsDisabled}
+        onPrefetchHistory={props.onPrefetchHistory}
         hasUncommittedChanges={props.hasUncommittedChanges}
         onSelect={props.onTabChange}
       />

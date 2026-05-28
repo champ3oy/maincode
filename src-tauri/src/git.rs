@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
-use git2::{BranchType, FetchOptions, Index, Patch, RemoteCallbacks, Repository, Status, StatusOptions, Tree};
+use git2::{BranchType, DiffFormat, FetchOptions, Index, Patch, RemoteCallbacks, Repository, Status, StatusOptions, Tree};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -1865,6 +1865,13 @@ pub struct CommitDiff {
 }
 
 #[derive(Serialize)]
+pub struct CommitPatch {
+    pub parent_oid: Option<String>,
+    pub files: Vec<FileEntry>,
+    pub patch: String,
+}
+
+#[derive(Serialize)]
 pub struct ListCommitsStreamAck {
     pub request_id: String,
     pub total_estimate: Option<u64>,
@@ -1875,6 +1882,13 @@ pub struct CommitGraphRow {
     pub oid: String,
     pub parents: Vec<String>,
     pub refs: Vec<String>,
+    pub subject: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_timestamp: i64,
+    pub committer_name: String,
+    pub committer_email: String,
+    pub committer_timestamp: i64,
 }
 
 #[tauri::command]
@@ -1899,11 +1913,49 @@ pub fn get_head_state(state: State<AppState>) -> Result<HeadState, String> {
     Ok(HeadState { branch, head_oid })
 }
 
+fn commit_details_from_commit(
+    oid: git2::Oid,
+    commit: &git2::Commit<'_>,
+    include_body: bool,
+) -> CommitDetails {
+    let message_bytes = commit.message_bytes();
+    let subject_end = message_bytes
+        .iter()
+        .position(|b| *b == b'\n')
+        .unwrap_or(message_bytes.len());
+    let subject = String::from_utf8_lossy(&message_bytes[..subject_end])
+        .trim_end()
+        .to_owned();
+    let body = if include_body && subject_end < message_bytes.len() {
+        String::from_utf8_lossy(&message_bytes[subject_end + 1..])
+            .trim_end()
+            .to_owned()
+    } else {
+        String::new()
+    };
+    let author = commit.author();
+    let committer = commit.committer();
+
+    CommitDetails {
+        oid: oid.to_string(),
+        subject,
+        body,
+        author_name: String::from_utf8_lossy(author.name_bytes()).into_owned(),
+        author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
+        author_timestamp: author.when().seconds() as i64,
+        committer_name: String::from_utf8_lossy(committer.name_bytes()).into_owned(),
+        committer_email: String::from_utf8_lossy(committer.email_bytes()).into_owned(),
+        committer_timestamp: committer.when().seconds() as i64,
+    }
+}
+
 #[tauri::command]
 pub fn get_commit_details_batch(
     oids: Vec<String>,
+    app: AppHandle,
     state: State<AppState>,
 ) -> Result<Vec<CommitDetails>, String> {
+    let total_start = Instant::now();
     let requested_count = oids.len();
     let workdir_path: PathBuf = {
         let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
@@ -1912,6 +1964,11 @@ pub fn get_commit_details_batch(
     };
 
     if requested_count == 0 {
+        perf_event(
+            &app,
+            "get_commit_details_batch",
+            json!({ "requested": 0, "returned": 0, "totalMs": 0.0 }),
+        );
         return Ok(Vec::new());
     }
 
@@ -1938,25 +1995,7 @@ pub fn get_commit_details_batch(
                         let Ok(commit) = repo.find_commit(oid) else {
                             continue;
                         };
-                        let message_bytes = commit.message_bytes();
-                        let message = String::from_utf8_lossy(message_bytes);
-                        let (subject, body) = match message.split_once('\n') {
-                            Some((s, rest)) => (s.to_owned(), rest.trim_end().to_owned()),
-                            None => (message.trim_end().to_owned(), String::new()),
-                        };
-                        let author = commit.author();
-                        let committer = commit.committer();
-                        out.push(CommitDetails {
-                            oid: oid.to_string(),
-                            subject,
-                            body,
-                            author_name: String::from_utf8_lossy(author.name_bytes()).into_owned(),
-                            author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
-                            author_timestamp: author.when().seconds() as i64,
-                            committer_name: String::from_utf8_lossy(committer.name_bytes()).into_owned(),
-                            committer_email: String::from_utf8_lossy(committer.email_bytes()).into_owned(),
-                            committer_timestamp: committer.when().seconds() as i64,
-                        });
+                        out.push(commit_details_from_commit(oid, &commit, true));
                     }
                     out
                 })
@@ -1971,6 +2010,16 @@ pub fn get_commit_details_batch(
         }
         all
     });
+
+    perf_event(
+        &app,
+        "get_commit_details_batch",
+        json!({
+            "requested": requested_count,
+            "returned": details.len(),
+            "totalMs": ms_since(total_start),
+        }),
+    );
 
     Ok(details)
 }
@@ -2092,6 +2141,146 @@ pub fn get_commit_diff(oid: String, state: State<AppState>) -> Result<CommitDiff
     })
 }
 
+fn push_patch_line(patch: &mut String, origin: char, content: &[u8]) {
+    match origin {
+        ' ' | '+' | '-' => patch.push(origin),
+        '=' | '>' | '<' => {
+            patch.push_str("\\ No newline at end of file\n");
+            return;
+        }
+        _ => {}
+    }
+    patch.push_str(&String::from_utf8_lossy(content));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_patch_line;
+
+    #[test]
+    fn patch_lines_keep_diff_origins() {
+        let mut patch = String::new();
+        push_patch_line(&mut patch, 'H', b"@@ -1,2 +1,2 @@\n");
+        push_patch_line(&mut patch, ' ', b"same\n");
+        push_patch_line(&mut patch, '-', b"old\n");
+        push_patch_line(&mut patch, '+', b"new\n");
+
+        assert_eq!(patch, "@@ -1,2 +1,2 @@\n same\n-old\n+new\n");
+    }
+}
+
+#[tauri::command]
+pub fn get_commit_patch(
+    oid: String,
+    app: AppHandle,
+    state: State<AppState>,
+) -> Result<CommitPatch, String> {
+    let total_start = Instant::now();
+    let commit_oid = git2::Oid::from_str(&oid).map_err(|e| format!("invalid oid: {e}"))?;
+
+    let workdir_path: PathBuf;
+    let lock_ms: f64;
+    let parent_oid_opt: Option<git2::Oid>;
+    let mut files: Vec<FileEntry> = Vec::new();
+    let mut patch = String::new();
+
+    {
+        let lock_start = Instant::now();
+        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+        lock_ms = ms_since(lock_start);
+        let repo = lock.as_ref().ok_or("no repository open")?;
+        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
+    }
+
+    let repo_open_start = Instant::now();
+    let repo = Repository::open(&workdir_path)
+        .map_err(|e| format!("failed to open repository: {e}"))?;
+    let repo_open_ms = ms_since(repo_open_start);
+
+    let diff_start = Instant::now();
+    let commit = repo
+        .find_commit(commit_oid)
+        .map_err(|e| format!("failed to find commit: {e}"))?;
+    let commit_tree = commit
+        .tree()
+        .map_err(|e| format!("failed to get commit tree: {e}"))?;
+    let (parent_oid, parent_tree) = if commit.parent_count() == 0 {
+        (None, None)
+    } else {
+        let parent = commit
+            .parent(0)
+            .map_err(|e| format!("failed to get parent: {e}"))?;
+        let parent_tree = parent
+            .tree()
+            .map_err(|e| format!("failed to get parent tree: {e}"))?;
+        (Some(parent.id()), Some(parent_tree))
+    };
+    parent_oid_opt = parent_oid;
+
+    let mut opts = git2::DiffOptions::new();
+    opts.context_lines(5);
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut opts))
+        .map_err(|e| format!("failed to diff trees: {e}"))?;
+    let diff_ms = ms_since(diff_start);
+
+    let files_start = Instant::now();
+    files.reserve(diff.deltas().len());
+    for delta in diff.deltas() {
+        let path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .and_then(|p| p.to_str())
+            .map(str::to_owned);
+        let Some(path) = path else { continue };
+        let kind = match delta.status() {
+            git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => ChangeKind::Added,
+            git2::Delta::Deleted => ChangeKind::Deleted,
+            git2::Delta::Renamed => ChangeKind::Renamed,
+            git2::Delta::Typechange => ChangeKind::Typechange,
+            _ => ChangeKind::Modified,
+        };
+        files.push(FileEntry {
+            path,
+            kind,
+            additions: 0,
+            deletions: 0,
+        });
+    }
+    let files_ms = ms_since(files_start);
+
+    let patch_start = Instant::now();
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        push_patch_line(&mut patch, line.origin(), line.content());
+        true
+    })
+    .map_err(|e| format!("failed to format patch: {e}"))?;
+    let patch_ms = ms_since(patch_start);
+
+    perf_event(
+        &app,
+        "get_commit_patch",
+        json!({
+            "oid": oid.get(..7).unwrap_or(&oid),
+            "files": files.len(),
+            "patchBytes": patch.len(),
+            "lockWaitMs": lock_ms,
+            "repoOpenMs": repo_open_ms,
+            "diffMs": diff_ms,
+            "filesMs": files_ms,
+            "patchMs": patch_ms,
+            "totalMs": ms_since(total_start),
+        }),
+    );
+
+    Ok(CommitPatch {
+        parent_oid: parent_oid_opt.map(|o| o.to_string()),
+        files,
+        patch,
+    })
+}
+
 #[tauri::command]
 pub fn get_root_commit_file_contents_batch(
     oid: String,
@@ -2185,6 +2374,20 @@ pub fn get_root_commit_file_contents_batch(
     Ok(responses)
 }
 
+fn count_reachable_commits(repo: &Repository, start_oid: git2::Oid) -> Result<u64, String> {
+    let mut walk = repo
+        .revwalk()
+        .map_err(|e| format!("failed to create count revwalk: {e}"))?;
+    walk.push(start_oid)
+        .map_err(|e| format!("failed to push count start oid: {e}"))?;
+    let mut total = 0u64;
+    for oid in walk {
+        oid.map_err(|e| format!("count revwalk error: {e}"))?;
+        total += 1;
+    }
+    Ok(total)
+}
+
 #[tauri::command]
 pub fn list_commits_stream(
     branch: Option<String>,
@@ -2229,11 +2432,11 @@ pub fn list_commits_stream(
                 // Unborn HEAD — emit `done` immediately with no chunks.
                 let _ = app.emit(
                     "commit-history:done",
-                    json!({ "request_id": request_id }),
+                    json!({ "request_id": request_id, "total_estimate": 0u64 }),
                 );
                 return Ok(ListCommitsStreamAck {
                     request_id,
-                    total_estimate: None,
+                    total_estimate: Some(0),
                 });
             }
             None => {
@@ -2264,6 +2467,19 @@ pub fn list_commits_stream(
         }
         ref_map = map;
     }
+    let count_start = Instant::now();
+    let count_repo = Repository::open(&workdir_path)
+        .map_err(|e| format!("failed to open repository for commit count: {e}"))?;
+    let total_estimate = count_reachable_commits(&count_repo, start_oid)?;
+    perf_event(
+        &app,
+        "list_commits_stream:count",
+        json!({
+            "requestId": &request_id,
+            "total": total_estimate,
+            "countMs": ms_since(count_start),
+        }),
+    );
 
     // Bump generation and clear cancel so this walker is not preempted.
     let my_gen = state.walker_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2273,6 +2489,7 @@ pub fn list_commits_stream(
     let walker_cancel = state.walker_cancel.clone();
     let app_thread = app.clone();
     let request_id_thread = request_id.clone();
+    let total_estimate_thread = total_estimate;
     let workdir_thread = workdir_path.clone();
 
     std::thread::spawn(move || {
@@ -2329,6 +2546,9 @@ pub fn list_commits_stream(
         };
 
         let mut buffer: Vec<CommitGraphRow> = Vec::with_capacity(GRAPH_CHUNK_SIZE);
+        let stream_start = Instant::now();
+        let mut chunk_start = Instant::now();
+        let mut emitted = 0usize;
 
         for oid_result in walk {
             let oid = match oid_result {
@@ -2357,14 +2577,21 @@ pub fn list_commits_stream(
                     return;
                 }
             };
-            let oid_string = oid.to_string();
+            let details = commit_details_from_commit(oid, &commit, false);
             let parents: Vec<String> =
                 commit.parent_ids().map(|p| p.to_string()).collect();
-            let refs = ref_map.get(&oid_string).cloned().unwrap_or_default();
+            let refs = ref_map.get(&details.oid).cloned().unwrap_or_default();
             buffer.push(CommitGraphRow {
-                oid: oid_string,
+                oid: details.oid,
                 parents,
                 refs,
+                subject: details.subject,
+                author_name: details.author_name,
+                author_email: details.author_email,
+                author_timestamp: details.author_timestamp,
+                committer_name: details.committer_name,
+                committer_email: details.committer_email,
+                committer_timestamp: details.committer_timestamp,
             });
 
             if buffer.len() >= GRAPH_CHUNK_SIZE {
@@ -2372,9 +2599,27 @@ pub fn list_commits_stream(
                     &mut buffer,
                     Vec::with_capacity(GRAPH_CHUNK_SIZE),
                 );
+                let chunk_len = chunk.len();
+                emitted += chunk_len;
+                perf_event(
+                    &app_thread,
+                    "list_commits_stream:chunk",
+                    json!({
+                        "requestId": &request_id_thread,
+                        "count": chunk_len,
+                        "loaded": emitted,
+                        "chunkMs": ms_since(chunk_start),
+                        "totalMs": ms_since(stream_start),
+                    }),
+                );
+                chunk_start = Instant::now();
                 let _ = app_thread.emit(
                     "commit-history:chunk",
-                    json!({ "request_id": request_id_thread, "oids": chunk }),
+                    json!({
+                        "request_id": request_id_thread,
+                        "oids": chunk,
+                        "total_estimate": total_estimate_thread,
+                    }),
                 );
                 if cancelled(&walker_generation, &walker_cancel) {
                     return;
@@ -2383,19 +2628,48 @@ pub fn list_commits_stream(
         }
 
         if !buffer.is_empty() {
+            let chunk_len = buffer.len();
+            emitted += chunk_len;
+            perf_event(
+                &app_thread,
+                "list_commits_stream:chunk",
+                json!({
+                    "requestId": &request_id_thread,
+                    "count": chunk_len,
+                    "loaded": emitted,
+                    "chunkMs": ms_since(chunk_start),
+                    "totalMs": ms_since(stream_start),
+                }),
+            );
             let _ = app_thread.emit(
                 "commit-history:chunk",
-                json!({ "request_id": request_id_thread, "oids": buffer }),
+                json!({
+                    "request_id": request_id_thread,
+                    "oids": buffer,
+                    "total_estimate": total_estimate_thread,
+                }),
             );
         }
+        perf_event(
+            &app_thread,
+            "list_commits_stream:done",
+            json!({
+                "requestId": &request_id_thread,
+                "loaded": emitted,
+                "totalMs": ms_since(stream_start),
+            }),
+        );
         let _ = app_thread.emit(
             "commit-history:done",
-            json!({ "request_id": request_id_thread }),
+            json!({
+                "request_id": request_id_thread,
+                "total_estimate": total_estimate_thread,
+            }),
         );
     });
 
     Ok(ListCommitsStreamAck {
         request_id,
-        total_estimate: None,
+        total_estimate: Some(total_estimate),
     })
 }

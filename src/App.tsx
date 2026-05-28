@@ -18,7 +18,8 @@ import { useDiffs } from "@/hooks/use-diffs";
 import { useBranchDiff } from "@/hooks/use-branch-diff";
 import { useComments } from "@/hooks/use-comments";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
-import { useCommitDiff } from "@/hooks/use-commit-diff";
+import { prefetchCommitDiff, useCommitDiff } from "@/hooks/use-commit-diff";
+import { useCommitHistory } from "@/hooks/use-commit-history";
 import { useCommitDetailsCache } from "@/hooks/use-commit-details-cache";
 import {
   CommitDetailHeader,
@@ -66,12 +67,14 @@ function App() {
   const [branchDiffActive, setBranchDiffActive] = useState(false);
   const branchDiff = useBranchDiff(branchDiffActive, workdir);
   const [tab, setTab] = useState<"changes" | "history">("changes");
+  const [historyPrefetch, setHistoryPrefetch] = useState(false);
   const [selectedCommitOid, setSelectedCommitOid] = useState<string | null>(null);
 
   useEffect(() => {
     setBranchDiffActive(false);
     setTab("changes");
     setSelectedCommitOid(null);
+    setHistoryPrefetch(false);
   }, [workdir]);
 
   useEffect(() => {
@@ -79,12 +82,18 @@ function App() {
   }, [tab]);
 
   const historyActive = tab === "history" && !branchDiffActive;
+  const historyWarm = historyActive || (historyPrefetch && !branchDiffActive);
+  const commitHistory = useCommitHistory(historyWarm, workdir);
   const commitDiff = useCommitDiff(historyActive ? selectedCommitOid : null);
   const { cache, requestVisible } = useCommitDetailsCache();
 
   useEffect(() => {
     if (historyActive && selectedCommitOid) requestVisible([selectedCommitOid]);
   }, [historyActive, selectedCommitOid, requestVisible]);
+
+  const handlePrefetchHistory = useCallback(() => {
+    setHistoryPrefetch(true);
+  }, []);
 
   useEffect(() => {
     if (!branchDiffActive || !branchDiff.resolved) return;
@@ -594,7 +603,10 @@ function App() {
               workdir={workdir}
               selectedOid={selectedCommitOid}
               onSelectOid={setSelectedCommitOid}
+              history={commitHistory}
               onCloseRepo={close}
+              onPrefetchHistory={handlePrefetchHistory}
+              onPrefetchOid={prefetchCommitDiff}
               tab={tab}
               hasUncommittedChanges={workingChangesCount > 0}
               onTabChange={handleTabChange}
@@ -618,6 +630,7 @@ function App() {
               tab={tab}
               hasUncommittedChanges={workingChangesCount > 0}
               onTabChange={handleTabChange}
+              onPrefetchHistory={handlePrefetchHistory}
             />
           )}
         </ResizablePanel>

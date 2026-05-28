@@ -5,6 +5,7 @@ interface SidebarTabsProps {
   disabled?: boolean;
   hasUncommittedChanges: boolean;
   onSelect: (tab: "changes" | "history") => void;
+  onPrefetchHistory?: () => void;
 }
 
 const TABS: ReadonlyArray<{ id: "changes" | "history"; label: string }> = [
@@ -17,6 +18,7 @@ export function SidebarTabs({
   disabled = false,
   hasUncommittedChanges,
   onSelect,
+  onPrefetchHistory,
 }: SidebarTabsProps) {
   return (
     <div
@@ -36,6 +38,8 @@ export function SidebarTabs({
             role="tab"
             aria-selected={isActive}
             aria-label={tab.label}
+            onPointerEnter={tab.id === "history" ? onPrefetchHistory : undefined}
+            onFocus={tab.id === "history" ? onPrefetchHistory : undefined}
             onClick={() => onSelect(tab.id)}
             className={cn(
               "flex-1 rounded-md text-xs font-medium h-7 transition-colors cursor-pointer",

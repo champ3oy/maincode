@@ -5,6 +5,7 @@ import {
   type FileContentsResponse,
   type FileEntry,
 } from "@/lib/tauri";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import { perfLog } from "@/lib/perf";
 
 type TextFileDiffContents = {
@@ -19,7 +20,15 @@ type BinaryFileDiffContents = {
   newBinary: boolean;
 };
 
-export type FileDiffContents = TextFileDiffContents | BinaryFileDiffContents;
+type ParsedFileDiffContents = {
+  kind: "parsed";
+  fileDiff: FileDiffMetadata;
+};
+
+export type FileDiffContents =
+  | TextFileDiffContents
+  | BinaryFileDiffContents
+  | ParsedFileDiffContents;
 
 interface UseDiffsReturn {
   diffs: Map<string, FileDiffContents>;

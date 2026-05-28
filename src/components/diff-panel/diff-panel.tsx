@@ -267,6 +267,19 @@ export function DiffPanel({
       const annotations =
         annotationsByFile.get(file.path) ?? EMPTY_ANNOTATIONS;
 
+      if (contents.kind === "parsed") {
+        const diffItem: CodeViewDiffItem<CommentMetadata> = {
+          id: file.path,
+          type: "diff",
+          fileDiff: contents.fileDiff,
+          annotations,
+          collapsed,
+          version: 1,
+        };
+        items.push(diffItem);
+        continue;
+      }
+
       if (contents.kind === "binary") {
         binary += 1;
         const fileItem: CodeViewFileItem<CommentMetadata> = {
@@ -355,6 +368,16 @@ export function DiffPanel({
         };
         viewer.updateItem(updated);
       } else {
+        if (contents.kind === "parsed") {
+          if (item.type !== "diff") continue;
+          const updated: CodeViewDiffItem<CommentMetadata> = {
+            ...item,
+            fileDiff: contents.fileDiff,
+            version: bumpVersion(path),
+          };
+          viewer.updateItem(updated);
+          continue;
+        }
         if (item.type !== "diff") continue;
         let parsed = cache.get(contents);
         if (!parsed) {

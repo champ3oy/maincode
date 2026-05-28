@@ -85,6 +85,7 @@ pub fn run() {
             git::get_head_state,
             git::get_commit_details_batch,
             git::get_commit_diff,
+            git::get_commit_patch,
             git::get_root_commit_file_contents_batch,
             git::list_commits_stream,
             review_bridge::submit_review,

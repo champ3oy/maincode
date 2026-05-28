@@ -9,14 +9,17 @@ import {
   type CommitGraphRow,
   type CommitHistoryChunkPayload,
   type CommitHistoryDonePayload,
+  type CommitDetails,
   type CommitHistoryErrorPayload,
 } from "@/lib/tauri";
 import { perfLog } from "@/lib/perf";
+import { useCommitDetailsCache } from "./use-commit-details-cache";
 
-interface CommitHistoryState {
+export interface CommitHistoryState {
   oids: string[];
   decorations: Map<string, CommitGraphRow>;
   loaded: number;
+  total: number | null;
   done: boolean;
   error: string | null;
   branch: string | null;
@@ -26,6 +29,7 @@ interface CommitHistoryState {
 interface CacheEntry {
   oids: string[];
   decorations: Map<string, CommitGraphRow>;
+  total: number | null;
 }
 
 const EMPTY_OIDS: string[] = [];
@@ -44,6 +48,20 @@ function cacheKey(
   return `${workdir}::${branch ?? "<detached>"}::${headOid}`;
 }
 
+function detailsFromGraphRow(row: CommitGraphRow): CommitDetails {
+  return {
+    oid: row.oid,
+    subject: row.subject,
+    body: "",
+    author_name: row.author_name,
+    author_email: row.author_email,
+    author_timestamp: row.author_timestamp,
+    committer_name: row.committer_name,
+    committer_email: row.committer_email,
+    committer_timestamp: row.committer_timestamp,
+  };
+}
+
 export function useCommitHistory(
   active: boolean,
   workdir: string | null,
@@ -55,6 +73,8 @@ export function useCommitHistory(
   const [error, setError] = useState<string | null>(null);
   const [branch, setBranch] = useState<string | null>(null);
   const [headOid, setHeadOid] = useState<string | null>(null);
+  const [total, setTotal] = useState<number | null>(null);
+  const { primeDetails } = useCommitDetailsCache();
 
   // The authoritative request id for the in-flight walk. Listener callbacks
   // compare against this to drop chunks from stale requests.
@@ -70,6 +90,7 @@ export function useCommitHistory(
   const oidsRef = useRef<string[]>(EMPTY_OIDS);
   const decorationsRef =
     useRef<Map<string, CommitGraphRow>>(EMPTY_DECORATIONS);
+  const totalRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!active || !workdir) return;
@@ -81,18 +102,22 @@ export function useCommitHistory(
     const resetWalkState = () => {
       oidsRef.current = [];
       decorationsRef.current = new Map();
+      totalRef.current = null;
       setOids(oidsRef.current);
       setDecorations(decorationsRef.current);
       setDone(false);
+      setTotal(null);
       setError(null);
     };
 
     const hydrateFromCache = (entry: CacheEntry) => {
       oidsRef.current = entry.oids;
       decorationsRef.current = entry.decorations;
+      totalRef.current = entry.total;
       activeRequestIdRef.current = null;
       setOids(entry.oids);
       setDecorations(entry.decorations);
+      setTotal(entry.total);
       setDone(true);
       setError(null);
     };
@@ -113,6 +138,7 @@ export function useCommitHistory(
           branch: head.branch,
           head: head.head_oid.slice(0, 7),
           count: cached.oids.length,
+          total: cached.total,
         });
         return;
       }
@@ -126,7 +152,12 @@ export function useCommitHistory(
         requestId,
       });
       try {
-        await listCommitsStream({ branch: head.branch, requestId });
+        const ack = await listCommitsStream({ branch: head.branch, requestId });
+        if (cancelled || activeRequestIdRef.current !== requestId) return;
+        if (ack.total_estimate !== null) {
+          totalRef.current = ack.total_estimate;
+          setTotal(ack.total_estimate);
+        }
       } catch (err) {
         if (cancelled || activeRequestIdRef.current !== requestId) return;
         const message = err instanceof Error ? err.message : String(err);
@@ -161,71 +192,85 @@ export function useCommitHistory(
       await startWalk(head);
     };
 
-    listen<CommitHistoryChunkPayload>(COMMIT_HISTORY_CHUNK_EVENT, (event) => {
-      const payload = event.payload;
-      if (payload.request_id !== activeRequestIdRef.current) return;
-      if (payload.oids.length === 0) return;
-      const nextOids = oidsRef.current.slice();
-      const nextDecs = new Map(decorationsRef.current);
-      for (const row of payload.oids) {
-        nextOids.push(row.oid);
-        nextDecs.set(row.oid, row);
+    const setupListeners = async () => {
+      const listeners = await Promise.all([
+        listen<CommitHistoryChunkPayload>(COMMIT_HISTORY_CHUNK_EVENT, (event) => {
+          const payload = event.payload;
+          if (payload.request_id !== activeRequestIdRef.current) return;
+          if (payload.total_estimate !== null) {
+            totalRef.current = payload.total_estimate;
+            setTotal(payload.total_estimate);
+          }
+          if (payload.oids.length === 0) return;
+          const nextOids = oidsRef.current.slice();
+          const nextDecs = new Map(decorationsRef.current);
+          const details: CommitDetails[] = [];
+          for (const row of payload.oids) {
+            nextOids.push(row.oid);
+            nextDecs.set(row.oid, row);
+            details.push(detailsFromGraphRow(row));
+          }
+          oidsRef.current = nextOids;
+          decorationsRef.current = nextDecs;
+          primeDetails(details);
+          setOids(nextOids);
+          setDecorations(nextDecs);
+          perfLog("useCommitHistory", "walk:chunk", {
+            count: payload.oids.length,
+            loaded: nextOids.length,
+            total: totalRef.current,
+          });
+        }),
+        listen<CommitHistoryDonePayload>(COMMIT_HISTORY_DONE_EVENT, (event) => {
+          const payload = event.payload;
+          if (payload.request_id !== activeRequestIdRef.current) return;
+          if (payload.total_estimate !== null) {
+            totalRef.current = payload.total_estimate;
+            setTotal(payload.total_estimate);
+          }
+          const head = headRef.current;
+          activeRequestIdRef.current = null;
+          setDone(true);
+          if (head.headOid) {
+            cache.set(cacheKey(currentWorkdir, head.branch, head.headOid), {
+              oids: oidsRef.current,
+              decorations: decorationsRef.current,
+              total: totalRef.current ?? oidsRef.current.length,
+            });
+          }
+          perfLog("useCommitHistory", "walk:done", {
+            branch: head.branch,
+            head: head.headOid?.slice(0, 7),
+            count: oidsRef.current.length,
+            total: totalRef.current,
+          });
+        }),
+        listen<CommitHistoryErrorPayload>(COMMIT_HISTORY_ERROR_EVENT, (event) => {
+          const payload = event.payload;
+          if (payload.request_id !== activeRequestIdRef.current) return;
+          activeRequestIdRef.current = null;
+          setError(payload.message);
+          setDone(true);
+          perfLog("useCommitHistory", "walk:error", {
+            requestId: payload.request_id,
+            error: payload.message,
+          });
+        }),
+        listen("repo:changed", () => {
+          if (cancelled) return;
+          void probe();
+        }),
+      ]);
+
+      if (cancelled) {
+        for (const fn of listeners) fn();
+        return;
       }
-      oidsRef.current = nextOids;
-      decorationsRef.current = nextDecs;
-      setOids(nextOids);
-      setDecorations(nextDecs);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisteners.push(fn);
-    });
-
-    listen<CommitHistoryDonePayload>(COMMIT_HISTORY_DONE_EVENT, (event) => {
-      const payload = event.payload;
-      if (payload.request_id !== activeRequestIdRef.current) return;
-      const head = headRef.current;
-      activeRequestIdRef.current = null;
-      setDone(true);
-      if (head.headOid) {
-        cache.set(cacheKey(currentWorkdir, head.branch, head.headOid), {
-          oids: oidsRef.current,
-          decorations: decorationsRef.current,
-        });
-      }
-      perfLog("useCommitHistory", "walk:done", {
-        branch: head.branch,
-        head: head.headOid?.slice(0, 7),
-        count: oidsRef.current.length,
-      });
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisteners.push(fn);
-    });
-
-    listen<CommitHistoryErrorPayload>(COMMIT_HISTORY_ERROR_EVENT, (event) => {
-      const payload = event.payload;
-      if (payload.request_id !== activeRequestIdRef.current) return;
-      activeRequestIdRef.current = null;
-      setError(payload.message);
-      setDone(true);
-      perfLog("useCommitHistory", "walk:error", {
-        requestId: payload.request_id,
-        error: payload.message,
-      });
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisteners.push(fn);
-    });
-
-    listen("repo:changed", () => {
-      if (cancelled) return;
+      unlisteners.push(...listeners);
       void probe();
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisteners.push(fn);
-    });
+    };
 
-    void probe();
+    void setupListeners();
 
     return () => {
       cancelled = true;
@@ -233,20 +278,22 @@ export function useCommitHistory(
       activeRequestIdRef.current = null;
       headRef.current = { branch: null, headOid: null };
       oidsRef.current = EMPTY_OIDS;
+      totalRef.current = null;
       decorationsRef.current = EMPTY_DECORATIONS;
       setOids(EMPTY_OIDS);
       setDecorations(EMPTY_DECORATIONS);
       setDone(false);
+      setTotal(null);
       setError(null);
       setBranch(null);
       setHeadOid(null);
     };
-  }, [active, workdir]);
+  }, [active, workdir, primeDetails]);
 
   const loaded = oids.length;
 
   return useMemo(
-    () => ({ oids, decorations, loaded, done, error, branch, headOid }),
-    [oids, decorations, loaded, done, error, branch, headOid],
+    () => ({ oids, decorations, loaded, total, done, error, branch, headOid }),
+    [oids, decorations, loaded, total, done, error, branch, headOid],
   );
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@/components/ui/button";
 import { IconArrowLeft } from "@tabler/icons-react";
-import { useCommitHistory } from "@/hooks/use-commit-history";
+import type { CommitHistoryState } from "@/hooks/use-commit-history";
 import { useCommitDetailsCache } from "@/hooks/use-commit-details-cache";
 import { CommitRow } from "./commit-row";
 
@@ -11,10 +11,13 @@ interface SidebarHistoryProps {
   selectedOid: string | null;
   onSelectOid: (oid: string) => void;
   onCloseRepo: () => void;
+  history: CommitHistoryState;
+  onPrefetchOid?: (oid: string) => void;
 }
 
 const PREFETCH_RADIUS = 50;
 const ROW_HEIGHT = 68;
+const HOVER_PREFETCH_DELAY_MS = 60;
 
 // Zed-style overlay scrollbar: thin, semi-transparent, fades in on hover.
 // Tailwind doesn't ship thumb utilities, so we inline the webkit + standard
@@ -32,14 +35,39 @@ export function SidebarHistory({
   selectedOid,
   onSelectOid,
   onCloseRepo,
+  history,
+  onPrefetchOid,
 }: SidebarHistoryProps) {
-  const { oids, loaded, done, error } = useCommitHistory(true, workdir);
+  const { oids, loaded, total, done, error } = history;
   const { requestVisible, getDetails } = useCommitDetailsCache();
 
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const hoverPrefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const cancelHoverPrefetch = useCallback(() => {
+    if (hoverPrefetchTimerRef.current === null) return;
+    clearTimeout(hoverPrefetchTimerRef.current);
+    hoverPrefetchTimerRef.current = null;
+  }, []);
+
+  const scheduleHoverPrefetch = useCallback(
+    (oid: string) => {
+      if (!onPrefetchOid) return;
+      cancelHoverPrefetch();
+      hoverPrefetchTimerRef.current = setTimeout(() => {
+        hoverPrefetchTimerRef.current = null;
+        onPrefetchOid(oid);
+      }, HOVER_PREFETCH_DELAY_MS);
+    },
+    [cancelHoverPrefetch, onPrefetchOid],
+  );
+
+  useEffect(() => cancelHoverPrefetch, [cancelHoverPrefetch]);
 
   const virtualizer = useVirtualizer({
-    count: oids.length,
+    count: done ? oids.length : oids.length + 1,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 12,
@@ -116,9 +144,11 @@ export function SidebarHistory({
     [workdir],
   );
 
-  const counterLabel = done
-    ? `${loaded} commit${loaded === 1 ? "" : "s"}`
-    : `${loaded} loaded`;
+  const visibleCount = total ?? loaded;
+  const counterLabel =
+    total !== null || done
+      ? `${visibleCount} commit${visibleCount === 1 ? "" : "s"}`
+      : "Loading…";
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col">
@@ -183,12 +213,20 @@ export function SidebarHistory({
                     transform: `translateY(${v.start}px)`,
                   }}
                 >
-                  <CommitRow
-                    oid={oid}
-                    details={getDetails(oid)}
-                    selected={oid === selectedOid}
-                    onSelect={onSelectOid}
-                  />
+                  {oid ? (
+                    <CommitRow
+                      oid={oid}
+                      details={getDetails(oid)}
+                      selected={oid === selectedOid}
+                      onSelect={onSelectOid}
+                      onPrefetch={scheduleHoverPrefetch}
+                      onCancelPrefetch={cancelHoverPrefetch}
+                    />
+                  ) : (
+                    <div className="px-3 py-3 text-xs text-muted-foreground">
+                      Loading more commits…
+                    </div>
+                  )}
                 </div>
               );
             })}
