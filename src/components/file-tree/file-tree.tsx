@@ -1,67 +1,118 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import {
-  IconChevronDown,
-  IconChevronRight,
-  IconFile,
-  IconFolder,
-  IconFolderOpen,
-} from "@tabler/icons-react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { FileTree as PierreFileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
 import { listen } from "@tauri-apps/api/event";
-import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 import { readDir, type DirEntryInfo } from "@/lib/fs";
 
 interface FileTreeProps {
   rootPath: string;
-  selectedPath: string | null;
   onOpenFile: (path: string) => void;
   refreshNonce?: number;
 }
 
+const toModelPath = (e: DirEntryInfo): string =>
+  e.is_dir ? e.path + "/" : e.path;
+
+const treeStyle: CSSProperties = {
+  colorScheme: "dark",
+  "--trees-bg-override": "transparent",
+  "--trees-fg-override": "var(--foreground)",
+  "--trees-fg-muted-override": "var(--muted-foreground)",
+  "--trees-bg-muted-override": "var(--muted)",
+  "--trees-selected-bg-override": "var(--accent)",
+  "--trees-selected-fg-override": "var(--accent-foreground)",
+  "--trees-border-color-override": "var(--border)",
+  "--trees-padding-inline-override": "6px",
+  "--trees-item-margin-x-override": "0px",
+  height: "100%",
+} as CSSProperties;
+
 export function FileTree({
   rootPath,
-  selectedPath,
   onOpenFile,
   refreshNonce = 0,
 }: FileTreeProps) {
-  const [children, setChildren] = useState<Map<string, DirEntryInfo[]>>(
-    new Map(),
-  );
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [paths, setPaths] = useState<string[]>([]);
+  // Set of fs paths (without trailing slash) that have been loaded
+  const loadedDirs = useRef<Set<string>>(new Set());
+  // Set of model-paths (with trailing slash) that are currently expanded
+  const expandedModelPaths = useRef<Set<string>>(new Set());
 
-  const loadDir = useCallback(async (dirPath: string) => {
-    try {
-      const entries = await readDir(dirPath);
-      setChildren((prev) => {
-        const next = new Map(prev);
-        next.set(dirPath, entries);
-        return next;
-      });
-    } catch (e) {
-      toast.error(`Failed to read ${dirPath}: ${e}`);
-    }
-  }, []);
+  const { model } = useFileTree({
+    id: "files-browser",
+    paths,
+    initialExpansion: "closed",
+    flattenEmptyDirectories: false,
+    density: "compact",
+    icons: { set: "standard", colored: true },
+  });
 
-  // Reset and load the root whenever the workspace changes.
+  // Sync model when paths change, preserving expansion state
   useEffect(() => {
-    setChildren(new Map());
-    setExpanded(new Set());
-    void loadDir(rootPath);
-  }, [rootPath, loadDir]);
-
-  // Reload root + expanded dirs on explicit refresh or watcher events.
-  const refreshLoaded = useCallback(() => {
-    void loadDir(rootPath);
-    setExpanded((current) => {
-      current.forEach((dir) => void loadDir(dir));
-      return current;
+    model.resetPaths(paths, {
+      initialExpandedPaths: [...expandedModelPaths.current],
     });
-  }, [rootPath, loadDir]);
+  }, [paths, model]);
 
+  // Load root directory on mount / rootPath change
   useEffect(() => {
-    if (refreshNonce > 0) refreshLoaded();
-  }, [refreshNonce, refreshLoaded]);
+    let cancelled = false;
+    loadedDirs.current = new Set();
+    expandedModelPaths.current = new Set();
+    setPaths([]);
 
+    readDir(rootPath)
+      .then((entries) => {
+        if (cancelled) return;
+        loadedDirs.current.add(rootPath);
+        setPaths(entries.map(toModelPath));
+      })
+      .catch(() => {
+        // ignore — root dir read failure is handled gracefully (empty tree)
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath]);
+
+  // Refresh: re-read all loaded dirs, rebuild paths set
+  const refreshLoaded = () => {
+    const currentLoaded = [...loadedDirs.current];
+    Promise.all(
+      currentLoaded.map((dir) =>
+        readDir(dir).then((entries) => ({ dir, entries })).catch(() => null),
+      ),
+    ).then((results) => {
+      // Build a new paths set: union of all loaded dir entries
+      // Each dir's entries are model-path form
+      const modelPathSet = new Set<string>();
+      for (const result of results) {
+        if (!result) continue;
+        for (const e of result.entries) {
+          modelPathSet.add(toModelPath(e));
+        }
+      }
+      const newPaths = [...modelPathSet];
+      // Keep expandedModelPaths in sync (only keep dirs that still exist)
+      const stillExpanded = new Set<string>();
+      for (const mp of expandedModelPaths.current) {
+        if (modelPathSet.has(mp)) stillExpanded.add(mp);
+      }
+      expandedModelPaths.current = stillExpanded;
+      setPaths(newPaths);
+    });
+  };
+
+  // refreshNonce prop: bump to force reload
+  const prevNonce = useRef(0);
+  useEffect(() => {
+    if (refreshNonce > 0 && refreshNonce !== prevNonce.current) {
+      prevNonce.current = refreshNonce;
+      refreshLoaded();
+    }
+  });
+
+  // Tauri repo:changed event → refresh
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
@@ -73,72 +124,57 @@ export function FileTree({
       cancelled = true;
       unlisten?.();
     };
-  }, [refreshLoaded]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const toggleDir = useCallback(
-    (dirPath: string) => {
-      setExpanded((prev) => {
-        const next = new Set(prev);
-        if (next.has(dirPath)) {
-          next.delete(dirPath);
-        } else {
-          next.add(dirPath);
-          if (!children.has(dirPath)) void loadDir(dirPath);
-        }
-        return next;
-      });
-    },
-    [children, loadDir],
-  );
+  // Selection → lazy-load directories / open files
+  const selectedPaths = useFileTreeSelection(model);
+  const lastHandledRef = useRef<string | null>(null);
 
-  const renderEntries = (dirPath: string, depth: number): ReactNode => {
-    const entries = children.get(dirPath);
-    if (!entries) {
-      return depth === 0 ? (
-        <p className="text-muted-foreground px-2 py-1 text-xs">Loading…</p>
-      ) : null;
+  useEffect(() => {
+    if (selectedPaths.length === 0) return;
+    const path = selectedPaths[selectedPaths.length - 1];
+    if (path === lastHandledRef.current) return;
+    lastHandledRef.current = path;
+
+    const item = model.getItem(path);
+    if (!item) return;
+
+    if (!item.isDirectory()) {
+      // It's a file — open it
+      onOpenFile(path);
+      return;
     }
-    return entries.map((node) => {
-      const isOpen = node.is_dir && expanded.has(node.path);
-      return (
-        <div key={node.path}>
-          <button
-            type="button"
-            title={node.path}
-            className={cn(
-              "flex h-6 w-full cursor-pointer items-center gap-1.5 rounded-sm px-1 text-left text-xs",
-              selectedPath === node.path
-                ? "bg-accent text-accent-foreground"
-                : "hover:bg-muted/40",
-            )}
-            style={{ paddingLeft: depth * 12 + 4 }}
-            onClick={() =>
-              node.is_dir ? toggleDir(node.path) : onOpenFile(node.path)
-            }
-          >
-            {node.is_dir ? (
-              <>
-                {isOpen ? (
-                  <IconChevronDown className="size-3 shrink-0" />
-                ) : (
-                  <IconChevronRight className="size-3 shrink-0" />
-                )}
-                {isOpen ? (
-                  <IconFolderOpen className="size-3.5 shrink-0 text-amber-600" />
-                ) : (
-                  <IconFolder className="size-3.5 shrink-0 text-amber-600" />
-                )}
-              </>
-            ) : (
-              <IconFile className="text-muted-foreground ml-4 size-3.5 shrink-0" />
-            )}
-            <span className="truncate">{node.name}</span>
-          </button>
-          {isOpen && renderEntries(node.path, depth + 1)}
-        </div>
-      );
-    });
-  };
 
-  return <div className="py-1">{renderEntries(rootPath, 0)}</div>;
+    // It's a directory. Strip trailing slash for the fs path.
+    const fsPath = path.replace(/\/$/, "");
+
+    if (loadedDirs.current.has(fsPath)) {
+      // Already loaded — track expansion (so resetPaths keeps it open)
+      expandedModelPaths.current.add(path);
+      return;
+    }
+
+    // Lazily load children
+    loadedDirs.current.add(fsPath);
+    expandedModelPaths.current.add(path);
+
+    readDir(fsPath)
+      .then((entries) => {
+        model.batch(
+          entries.map((e) => ({ type: "add" as const, path: toModelPath(e) })),
+        );
+      })
+      .catch(() => {
+        // Allow retry on error
+        loadedDirs.current.delete(fsPath);
+        expandedModelPaths.current.delete(path);
+      });
+  }, [selectedPaths, model, onOpenFile]);
+
+  return (
+    <div style={{ height: "100%" }}>
+      <PierreFileTree model={model} style={treeStyle} />
+    </div>
+  );
 }

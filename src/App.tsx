@@ -157,7 +157,6 @@ function App() {
               <div className="min-h-0 flex-1 overflow-auto p-2">
                 <FileTree
                   rootPath={rootPath}
-                  selectedPath={null}
                   onOpenFile={(path) => toast.info(`TODO open ${path}`)}
                 />
               </div>
