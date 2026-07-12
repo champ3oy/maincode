@@ -34,3 +34,9 @@ if spctl -a -vvv --type exec "$APP" 2>&1 | grep -q accepted; then
 else
   echo "  Gatekeeper: not notarized (signed only)."
 fi
+
+# Tauri notarizes the .app but leaves the .dmg wrapper merely signed. Staple the
+# DMG too so downloaders don't hit a Gatekeeper prompt on the disk image itself.
+if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+  sh "$(dirname "$0")/staple-dmg.sh"
+fi
