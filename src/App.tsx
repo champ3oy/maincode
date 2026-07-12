@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { toast } from "sonner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -14,10 +13,13 @@ import { useRepoStatus } from "@/hooks/use-repo-status";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { readLastFolder, useWorkspace } from "@/hooks/use-workspace";
 import { getLaunchPath, getRepoBranch } from "@/lib/tauri";
+import { useEditor } from "@/hooks/use-editor";
+import { EditorArea } from "@/components/editor/editor-area";
 
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
+  const { openFile } = useEditor();
   const { addRecent } = useRecentRepos();
   const [gitAvailable, setGitAvailable] = useState(false);
   const [gitPending, setGitPending] = useState(false);
@@ -157,18 +159,14 @@ function App() {
               <div className="min-h-0 flex-1 overflow-auto p-2">
                 <FileTree
                   rootPath={rootPath}
-                  onOpenFile={(path) => toast.info(`TODO open ${path}`)}
+                  onOpenFile={(path) => void openFile(path)}
                 />
               </div>
             </div>
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel defaultSize="78%">
-            <div className="flex h-full items-center justify-center">
-              <p className="text-muted-foreground text-sm">
-                Open a file from the sidebar
-              </p>
-            </div>
+            <EditorArea />
           </ResizablePanel>
         </ResizablePanelGroup>
         {gitAvailable && workdir ? (
