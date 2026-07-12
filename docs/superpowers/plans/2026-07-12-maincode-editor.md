@@ -1292,6 +1292,14 @@ Adapt the `StatusBar` call site to its actual props if they differ (same rule as
 
 ### Task 9: File tree
 
+> **REVISED 2026-07-12 (user request):** Match cub.dev's look by rendering the tree
+> with the **`@pierre/trees`** `FileTree` component (built-in colored file-type icons),
+> NOT a hand-rolled tree. Keep **lazy per-folder** loading and **show everything**
+> (incl. node_modules). Mechanism confirmed: a path ending in `/` is a directory.
+> Full API + code patterns in `.superpowers/sdd/pierre-trees-guide.md`; the executable
+> brief is `.superpowers/sdd/task-9-brief.md`. The hand-rolled `<div>`-tree code below is
+> **superseded** — kept only for the App.tsx wiring reference (Step 2).
+
 **Files:**
 - Create: `src/components/file-tree/file-tree.tsx`
 - Modify: `src/App.tsx`
@@ -2169,8 +2177,15 @@ export function EditorArea({ onCursor }: EditorAreaProps) {
 
 ### Task 13: File operations (context menu, create/rename/delete)
 
+> **REVISED 2026-07-12:** Because the tree is now the `@pierre/trees` `FileTree`
+> (Task 9 revision), the right-click menu must use its **`renderContextMenu`** prop
+> (a custom menu, base-ui, positioned via `context.anchorRect`, portal root marked
+> `data-file-tree-context-menu-root="true"`) — NOT wrapping rows in `ui/context-menu.tsx`.
+> `NameDialog` and the create/rename/delete handlers below are unchanged. See
+> `.superpowers/sdd/pierre-trees-guide.md` §6.
+
 **Files:**
-- Create: `src/components/file-tree/name-dialog.tsx`
+- Create: `src/components/file-tree/name-dialog.tsx`, `src/components/file-tree/file-tree-context-menu.tsx`
 - Modify: `src/components/file-tree/file-tree.tsx`, `src/App.tsx`
 
 **Interfaces:**
@@ -2342,6 +2357,17 @@ Known v1 limitation (do not fix): renaming a *folder* doesn't retarget open tabs
 ---
 
 ### Task 14: Source control panel and diff view
+
+> **REVISED 2026-07-12:** The changed-files list should match cub.dev exactly by
+> rendering with the **`@pierre/trees`** `FileTree` (git-status mode: `gitStatus` +
+> colored icons), as cub's original `sidebar.tsx` did — NOT the hand-rolled
+> `FileRow`/`Section` list in the superseded code below. Port cub's working-mode tree:
+> two trees (staged, unstaged) OR one tree with a `gitStatus` map, `mapKind` →
+> `GitStatus`, `initialExpansion:'open'`, selection → scroll the diff. Keep `CommitBar`,
+> the stage/unstage/discard/commit handlers, and the `SidebarSwitch`. Reference:
+> `.superpowers/sdd/pierre-trees-guide.md` §"Source Control panel" + cub original at
+> `git show 16a8aa4:src/components/sidebar/sidebar.tsx`. The `SourceControlPanel`
+> plain-list code below is **superseded** for the file list; its handler wiring stays valid.
 
 **Files:**
 - Create: `src/components/sidebar/sidebar-switch.tsx`, `src/components/source-control/source-control-panel.tsx`
