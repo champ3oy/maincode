@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -7,6 +8,7 @@ import {
 } from "@/components/ui/resizable";
 import { Toaster } from "@/components/ui/sonner";
 import { StatusBar } from "@/components/status-bar/status-bar";
+import { FileTree } from "@/components/file-tree/file-tree";
 import { Welcome } from "@/components/welcome/welcome";
 import { useRepoStatus } from "@/hooks/use-repo-status";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
@@ -153,9 +155,11 @@ function App() {
                 </span>
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-2">
-                <p className="text-muted-foreground text-xs">
-                  File tree coming soon
-                </p>
+                <FileTree
+                  rootPath={rootPath}
+                  selectedPath={null}
+                  onOpenFile={(path) => toast.info(`TODO open ${path}`)}
+                />
               </div>
             </div>
           </ResizablePanel>
