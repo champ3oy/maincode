@@ -13,14 +13,5 @@
         "hiddenTitle": true
       }
     ]
-  },
-  "bundle": {
-    "icon": [
-      "icons/icon-dev-32x32.png",
-      "icons/icon-dev-128x128.png",
-      "icons/icon-dev-128x128@2x.png",
-      "icons/icon-dev.icns",
-      "icons/icon-dev.ico"
-    ]
   }
 }
