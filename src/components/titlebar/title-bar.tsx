@@ -5,8 +5,6 @@ import { cn } from "@/lib/utils";
 export type SidebarTab = "files" | "changes";
 
 interface TitleBarProps {
-  /** Shown as the window title (left side, after the traffic lights). */
-  title: string;
   activeTab: SidebarTab;
   gitAvailable: boolean;
   changeCount: number;
@@ -17,7 +15,6 @@ interface TitleBarProps {
 // macOS traffic lights float at top-left over this bar; `pl-20` reserves room
 // for them. `data-tauri-drag-region` makes the empty areas draggable.
 export function TitleBar({
-  title,
   activeTab,
   gitAvailable,
   changeCount,
@@ -28,12 +25,6 @@ export function TitleBar({
       data-tauri-drag-region
       className="flex h-9 shrink-0 select-none items-center border-b border-border bg-sidebar pr-2 pl-20"
     >
-      <span
-        data-tauri-drag-region
-        className="min-w-0 truncate text-xs font-medium text-muted-foreground"
-      >
-        {title}
-      </span>
       <div className="ml-auto flex items-center gap-0.5">
         <TabButton
           label="Files"

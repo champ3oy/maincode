@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
+import { IconFilePlus, IconFolderPlus } from "@tabler/icons-react";
 import { languageKeyForPath, LANGUAGE_LABELS } from "@/lib/language";
 import {
   ResizablePanelGroup,
@@ -386,7 +387,6 @@ function App() {
       />
       <div className="flex h-full flex-col">
         <TitleBar
-          title={rootName ?? "Maincode"}
           activeTab={sidebarTab}
           gitAvailable={gitAvailable}
           changeCount={(status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)}
@@ -412,7 +412,7 @@ function App() {
                       void handleFileOp({ kind: "new-file", dir: rootPath })
                     }
                   >
-                    <span className="text-xs leading-none">+F</span>
+                    <IconFilePlus className="size-4" stroke={1.75} />
                   </button>
                   <button
                     type="button"
@@ -422,7 +422,7 @@ function App() {
                       void handleFileOp({ kind: "new-folder", dir: rootPath })
                     }
                   >
-                    <span className="text-xs leading-none">+D</span>
+                    <IconFolderPlus className="size-4" stroke={1.75} />
                   </button>
                 </div>
               )}
