@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { useTheme } from "next-themes";
 import {
@@ -15,20 +14,14 @@ import {
 import {
   DEFAULT_THEMES,
   parseDiffFromFile,
-  type AnnotationSide,
   type CodeViewDiffItem,
   type CodeViewFileItem,
   type CodeViewItem,
   type CodeViewOptions,
-  type DiffLineAnnotation,
   type FileDiffMetadata,
-  type SelectedLineRange,
 } from "@pierre/diffs";
 
 import { DiffToolbar } from "./diff-toolbar";
-import { getAnnotationTarget } from "./annotation-target";
-import { CommentForm } from "@/components/comments/comment-form";
-import { CommentBubble } from "@/components/comments/comment-bubble";
 import { cn } from "@/lib/utils";
 import { IconChevronDown } from "@tabler/icons-react";
 import { perfLog } from "@/lib/perf";
@@ -44,9 +37,8 @@ import {
 } from "@/hooks/use-diff-settings";
 import type { ChangeKind, FileEntry } from "@/lib/tauri";
 import type { FileDiffContents } from "@/hooks/use-diffs";
-import type { ActionType, CommentMetadata } from "@/types/comments";
 
-type Item = CodeViewItem<CommentMetadata>;
+type Item = CodeViewItem;
 
 interface DiffPanelProps {
   files: FileEntry[];
@@ -58,59 +50,7 @@ interface DiffPanelProps {
   onToggleExpandAll: () => void;
   scrollToPath: string | null;
   scrollNonce: number;
-  annotationsByFile?: Map<string, DiffLineAnnotation<CommentMetadata>[]>;
-  hasOpenForm?: boolean;
-  totalCommentCount?: number;
-  pendingCount?: number;
-  acknowledgedCount?: number;
-  resolvedCount?: number;
-  onAddAnnotation?: (
-    filePath: string,
-    side: AnnotationSide,
-    lineStart: number,
-    lineEnd: number,
-  ) => void;
-  onCancelAnnotation?: (
-    filePath: string,
-    side: AnnotationSide,
-    lineNumber: number,
-  ) => void;
-  onSubmitAnnotation?: (
-    filePath: string,
-    side: AnnotationSide,
-    lineNumber: number,
-    text: string,
-    actionType: ActionType,
-  ) => void;
-  onDeleteAnnotation?: (
-    filePath: string,
-    side: AnnotationSide,
-    lineNumber: number,
-  ) => void;
-  onSubmitReview?: () => void;
-  onClearResolved?: () => void;
-  submittingReview?: boolean;
-  branchInfo?: {
-    baseRef: string;
-    additions: number;
-    deletions: number;
-    onBack: () => void;
-  };
-  commitStats?: { additions: number; deletions: number };
-  workingChangesNotice?: {
-    count: number;
-    onBack: () => void;
-  };
-  readOnly?: boolean;
-  commitDetailHeader?: ReactNode;
-  commitDetailMessage?: ReactNode;
 }
-
-const EMPTY_ANNOTATIONS: DiffLineAnnotation<CommentMetadata>[] = [];
-const EMPTY_ANNOTATIONS_MAP: Map<
-  string,
-  DiffLineAnnotation<CommentMetadata>[]
-> = new Map();
 
 function getBinaryDiffMessage(
   kind: ChangeKind,
@@ -169,25 +109,6 @@ export function DiffPanel({
   onToggleExpandAll,
   scrollToPath,
   scrollNonce,
-  annotationsByFile = EMPTY_ANNOTATIONS_MAP,
-  hasOpenForm = false,
-  totalCommentCount = 0,
-  pendingCount = 0,
-  acknowledgedCount = 0,
-  resolvedCount = 0,
-  onAddAnnotation,
-  onCancelAnnotation,
-  onSubmitAnnotation,
-  onDeleteAnnotation,
-  onSubmitReview,
-  onClearResolved,
-  submittingReview = false,
-  branchInfo,
-  commitStats,
-  workingChangesNotice,
-  readOnly = false,
-  commitDetailHeader,
-  commitDetailMessage,
 }: DiffPanelProps) {
   const { resolvedTheme } = useTheme();
   const themeType: "light" | "dark" =
@@ -196,7 +117,7 @@ export function DiffPanel({
   const { font, fontSize, wrap } = settings;
   const workerPoolReady = useIsWorkerPoolReady();
 
-  const viewerRef = useRef<CodeViewHandle<CommentMetadata> | null>(null);
+  const viewerRef = useRef<CodeViewHandle<undefined> | null>(null);
 
   // Tracks the last scrollNonce we successfully delivered to the viewer.
   // The scroll effect bails when the viewer is not yet mounted (workers still
@@ -209,9 +130,6 @@ export function DiffPanel({
   // imperative sync effects. Reset on viewerKey change (i.e. CodeView
   // remount) so the next batch of updateItem calls starts cleanly.
   const versionsRef = useRef<Map<string, number>>(new Map());
-  const lastAnnotationsRef = useRef<
-    Map<string, DiffLineAnnotation<CommentMetadata>[]>
-  >(new Map());
   const lastDiffsRef = useRef<Map<string, FileDiffContents>>(new Map());
 
   // Caches that survive remounts.
@@ -246,11 +164,10 @@ export function DiffPanel({
   if (previousViewerKeyRef.current !== viewerKey) {
     previousViewerKeyRef.current = viewerKey;
     versionsRef.current = new Map();
-    lastAnnotationsRef.current = new Map(annotationsByFile);
     lastDiffsRef.current = new Map(diffs);
   }
 
-  // Build seed items from the current diffs/annotations/expanded state. The
+  // Build seed items from the current diffs/expanded state. The
   // resulting array is only consumed by CodeView at first mount; after that,
   // updates flow through viewer.updateItem in the sync effects below.
   const initialItems = useMemo<Item[]>(() => {
@@ -264,15 +181,13 @@ export function DiffPanel({
     for (const file of files) {
       const contents = diffs.get(file.path);
       if (!contents) continue;
-      const annotations =
-        annotationsByFile.get(file.path) ?? EMPTY_ANNOTATIONS;
 
       if (contents.kind === "parsed") {
-        const diffItem: CodeViewDiffItem<CommentMetadata> = {
+        const diffItem: CodeViewDiffItem = {
           id: file.path,
           type: "diff",
           fileDiff: contents.fileDiff,
-          annotations,
+          annotations: [],
           collapsed,
           version: 1,
         };
@@ -282,7 +197,7 @@ export function DiffPanel({
 
       if (contents.kind === "binary") {
         binary += 1;
-        const fileItem: CodeViewFileItem<CommentMetadata> = {
+        const fileItem: CodeViewFileItem = {
           id: file.path,
           type: "file",
           file: {
@@ -294,8 +209,6 @@ export function DiffPanel({
             ),
             lang: "text",
           },
-          // CodeViewFileItem only allows LineAnnotation[]; binary placeholders
-          // never carry comments.
           annotations: [],
           collapsed,
           version: 1,
@@ -312,11 +225,11 @@ export function DiffPanel({
         cache.set(contents, parsed);
         cacheMisses += 1;
       }
-      const diffItem: CodeViewDiffItem<CommentMetadata> = {
+      const diffItem: CodeViewDiffItem = {
         id: file.path,
         type: "diff",
         fileDiff: parsed,
-        annotations,
+        annotations: [],
         collapsed,
         version: 1,
       };
@@ -331,7 +244,7 @@ export function DiffPanel({
       ms: +(performance.now() - start).toFixed(2),
     });
     return items;
-  }, [files, diffs, annotationsByFile, allExpanded]);
+  }, [files, diffs, allExpanded]);
 
   const bumpVersion = useCallback((id: string): number => {
     const next = (versionsRef.current.get(id) ?? 1) + 1;
@@ -353,7 +266,7 @@ export function DiffPanel({
         if (item.type !== "file") continue; // type swap → viewerKey remount
         const meta = fileMetaByPath.get(path);
         if (!meta) continue;
-        const updated: CodeViewFileItem<CommentMetadata> = {
+        const updated: CodeViewFileItem = {
           ...item,
           file: {
             name: path,
@@ -370,7 +283,7 @@ export function DiffPanel({
       } else {
         if (contents.kind === "parsed") {
           if (item.type !== "diff") continue;
-          const updated: CodeViewDiffItem<CommentMetadata> = {
+          const updated: CodeViewDiffItem = {
             ...item,
             fileDiff: contents.fileDiff,
             version: bumpVersion(path),
@@ -384,7 +297,7 @@ export function DiffPanel({
           parsed = parseDiffFromFile(contents.oldFile, contents.newFile);
           cache.set(contents, parsed);
         }
-        const updated: CodeViewDiffItem<CommentMetadata> = {
+        const updated: CodeViewDiffItem = {
           ...item,
           fileDiff: parsed,
           version: bumpVersion(path),
@@ -394,38 +307,6 @@ export function DiffPanel({
     }
     lastDiffsRef.current = new Map(diffs);
   }, [diffs, fileMetaByPath, bumpVersion]);
-
-  // ── Sync annotations into items ──────────────────────────────────
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    if (readOnly) return;
-    const prev = lastAnnotationsRef.current;
-    for (const [path, annotations] of annotationsByFile) {
-      if (prev.get(path) === annotations) continue;
-      const item = viewer.getItem(path);
-      if (!item || item.type !== "diff") continue;
-      const updated: CodeViewDiffItem<CommentMetadata> = {
-        ...item,
-        annotations,
-        version: bumpVersion(path),
-      };
-      viewer.updateItem(updated);
-    }
-    for (const path of prev.keys()) {
-      if (annotationsByFile.has(path)) continue;
-      const item = viewer.getItem(path);
-      if (!item || item.type !== "diff") continue;
-      if (!item.annotations || item.annotations.length === 0) continue;
-      const updated: CodeViewDiffItem<CommentMetadata> = {
-        ...item,
-        annotations: [],
-        version: bumpVersion(path),
-      };
-      viewer.updateItem(updated);
-    }
-    lastAnnotationsRef.current = new Map(annotationsByFile);
-  }, [annotationsByFile, bumpVersion]);
 
   // ── Sync allExpanded toggle into items ───────────────────────────
   useEffect(() => {
@@ -533,51 +414,6 @@ export function DiffPanel({
     [fileMetaByPath, toggleCollapsed],
   );
 
-  const renderAnnotation = useCallback(
-    (
-      annotation:
-        | DiffLineAnnotation<CommentMetadata>
-        | { lineNumber: number; metadata?: CommentMetadata | undefined },
-    ) => {
-      if (readOnly) return null;
-      if (!onSubmitAnnotation || !onCancelAnnotation || !onDeleteAnnotation)
-        return null;
-      const meta = (annotation as DiffLineAnnotation<CommentMetadata>).metadata;
-      if (!meta) return null;
-      if (meta.status === "draft" && !meta.text) {
-        return (
-          <CommentForm
-            onSubmit={(text, actionType) =>
-              onSubmitAnnotation(
-                meta.filePath,
-                meta.side,
-                meta.lineEnd,
-                text,
-                actionType,
-              )
-            }
-            onCancel={() =>
-              onCancelAnnotation(meta.filePath, meta.side, meta.lineEnd)
-            }
-          />
-        );
-      }
-      return (
-        <CommentBubble
-          text={meta.text!}
-          actionType={meta.actionType!}
-          status={meta.status}
-          summary={meta.summary}
-          dismissReason={meta.dismissReason}
-          onDelete={() =>
-            onDeleteAnnotation(meta.filePath, meta.side, meta.lineEnd)
-          }
-        />
-      );
-    },
-    [readOnly, onSubmitAnnotation, onCancelAnnotation, onDeleteAnnotation],
-  );
-
   // ── CodeView style + options ─────────────────────────────────────
 
   const codeViewStyle = useMemo<React.CSSProperties>(
@@ -590,28 +426,7 @@ export function DiffPanel({
     [font, fontSize],
   );
 
-  const addAnnotationForRange = useCallback(
-    (range: SelectedLineRange, id: string) => {
-      if (!onAddAnnotation) return;
-      const target = getAnnotationTarget(range);
-      onAddAnnotation(id, target.side, target.lineStart, target.lineEnd);
-    },
-    [onAddAnnotation],
-  );
-
-  const options = useMemo<CodeViewOptions<CommentMetadata>>(() => {
-    type DiffCtx = { item: { type: "diff" | "file"; id: string } };
-    const handleSelectionEnd = (
-      range: SelectedLineRange | null,
-      ctx: DiffCtx,
-    ) => {
-      if (range == null || ctx.item.type !== "diff") return;
-      addAnnotationForRange(range, ctx.item.id);
-    };
-    const handleGutterClick = (range: SelectedLineRange, ctx: DiffCtx) => {
-      if (ctx.item.type !== "diff") return;
-      addAnnotationForRange(range, ctx.item.id);
-    };
+  const options = useMemo<CodeViewOptions<undefined>>(() => {
     return {
       theme: DEFAULT_THEMES,
       themeType,
@@ -628,16 +443,8 @@ export function DiffPanel({
       hunkSeparators: "line-info",
       stickyHeaders: true,
       layout: { paddingTop: 0, paddingBottom: 0, gap: 1 },
-      enableLineSelection: !readOnly && !hasOpenForm,
-      enableGutterUtility: !readOnly && !hasOpenForm,
-      onLineSelectionEnd: readOnly
-        ? undefined
-        : (handleSelectionEnd as CodeViewOptions<CommentMetadata>["onLineSelectionEnd"]),
-      onGutterUtilityClick: readOnly
-        ? undefined
-        : (handleGutterClick as CodeViewOptions<CommentMetadata>["onGutterUtilityClick"]),
     };
-  }, [addAnnotationForRange, diffStyle, hasOpenForm, readOnly, themeType, wrap]);
+  }, [diffStyle, themeType, wrap]);
 
   if (loading) {
     return (
@@ -649,90 +456,32 @@ export function DiffPanel({
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden overscroll-contain bg-background [contain:strict]">
-      {workingChangesNotice && workingChangesNotice.count > 0 && (
-        <button
-          type="button"
-          onClick={workingChangesNotice.onBack}
-          className="flex h-7 shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-3 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-        >
-          <span className="truncate">
-            {workingChangesNotice.count} working change
-            {workingChangesNotice.count === 1 ? "" : "s"} waiting
-          </span>
-          <span className="ml-auto shrink-0 text-foreground">
-            Back to changes
-          </span>
-        </button>
-      )}
-      {(initialItems.length > 0 || branchInfo || commitDetailHeader) && (
+      {initialItems.length > 0 && (
         <DiffToolbar
           diffStyle={diffStyle}
           onDiffStyleChange={onDiffStyleChange}
           allExpanded={allExpanded}
           onToggleExpandAll={onToggleExpandAll}
-          commentCount={totalCommentCount}
-          pendingCount={pendingCount}
-          acknowledgedCount={acknowledgedCount}
-          resolvedCount={resolvedCount}
-          onSubmitReview={onSubmitReview}
-          onClearResolved={onClearResolved}
-          submittingReview={submittingReview}
-          branchInfo={branchInfo}
-          commitStats={commitStats}
-          readOnly={readOnly}
         />
       )}
-      {commitDetailHeader ? (
-        <div className="shrink-0 border-b border-border bg-background">
-          {commitDetailHeader}
-        </div>
-      ) : null}
       {initialItems.length === 0 ? (
-        <>
-          {commitDetailMessage ? (
-            <div className="shrink-0 border-b border-border bg-background">
-              {commitDetailMessage}
-            </div>
-          ) : null}
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              {branchInfo
-                ? `No changes since ${branchInfo.baseRef}`
-                : commitDetailHeader
-                  ? "No file changes in this commit"
-                  : "No changes to review"}
-            </p>
-          </div>
-        </>
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-sm text-muted-foreground">No changes to review</p>
+        </div>
       ) : !workerPoolReady ? (
-        <>
-          {commitDetailMessage ? (
-            <div className="shrink-0 border-b border-border bg-background">
-              {commitDetailMessage}
-            </div>
-          ) : null}
-          <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">Initializing…</p>
-          </div>
-        </>
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-sm text-muted-foreground">Initializing…</p>
+        </div>
       ) : (
-        <>
-          {commitDetailMessage ? (
-            <div className="shrink-0 border-b border-border bg-background">
-              {commitDetailMessage}
-            </div>
-          ) : null}
-          <CodeView<CommentMetadata>
-            key={viewerKey}
-            ref={viewerRef}
-            initialItems={initialItems}
-            options={options}
-            className="relative min-h-0 min-w-0 w-full flex-1 overflow-y-auto overflow-x-clip overscroll-contain [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style] [&_diffs-container]:shadow-[0_-1px_0_var(--color-border),0_1px_0_var(--color-border)]"
-            style={codeViewStyle}
-            renderCustomHeader={renderCustomHeader}
-            renderAnnotation={renderAnnotation}
-          />
-        </>
+        <CodeView
+          key={viewerKey}
+          ref={viewerRef}
+          initialItems={initialItems}
+          options={options}
+          className="relative min-h-0 min-w-0 w-full flex-1 overflow-y-auto overflow-x-clip overscroll-contain [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style] [&_diffs-container]:shadow-[0_-1px_0_var(--color-border),0_1px_0_var(--color-border)]"
+          style={codeViewStyle}
+          renderCustomHeader={renderCustomHeader}
+        />
       )}
     </div>
   );

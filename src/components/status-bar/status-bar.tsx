@@ -40,7 +40,6 @@ import {
   type FontChoice,
 } from "@/hooks/use-diff-settings";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
-import { useRecentBranches } from "@/hooks/use-recent-branches";
 import {
   checkoutBranch,
   listBranches,
@@ -104,8 +103,6 @@ function ProjectSegment({
 }) {
   const [open, setOpen] = useState(false);
   const { recent } = useRecentRepos();
-  const recentPaths = useMemo(() => recent.map((r) => r.path), [recent]);
-  const branchByPath = useRecentBranches(recentPaths);
   const others = useMemo(
     () => recent.filter((r) => r.path !== workdir),
     [recent, workdir],
@@ -161,9 +158,7 @@ function ProjectSegment({
                 No other recent projects.
               </li>
             ) : (
-              others.map((r) => {
-                const b = branchByPath[r.path];
-                return (
+              others.map((r) => (
                   <li key={r.path}>
                     <button
                       type="button"
@@ -174,13 +169,9 @@ function ProjectSegment({
                       <span className="truncate font-medium">
                         {basename(r.path)}
                       </span>
-                      <span className="ml-auto shrink-0 truncate font-mono text-[11px] text-muted-foreground">
-                        {b === undefined ? "" : b ?? "—"}
-                      </span>
                     </button>
                   </li>
-                );
-              })
+                ))
             )}
           </ul>
           <div className="border-t border-border p-1">
