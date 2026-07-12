@@ -324,7 +324,7 @@ function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Configure how cub looks and behaves.
+            Configure how Maincode looks and behaves.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Cub",
-  "version": "0.6.0",
-  "identifier": "com.ephraimduncan.cub",
+  "productName": "Maincode",
+  "version": "0.1.0",
+  "identifier": "com.morpheusdesk.maincode",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Cub",
+        "title": "Maincode",
         "width": 1200,
         "height": 800,
         "minWidth": 1200,
@@ -33,13 +33,5 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "REPLACE_WITH_YOUR_TAURI_UPDATER_PUBLIC_KEY",
-      "endpoints": [
-        "https://github.com/ephraimduncan/cub.dev/releases/latest/download/latest.json"
-      ]
-    }
   }
 }

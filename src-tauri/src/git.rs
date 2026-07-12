@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 // also prints to stderr so logs show up in the terminal that launched the
 // Tauri process. Remove once the lag investigation is done.
 fn perf_event(app: &AppHandle, op: &str, extra: serde_json::Value) {
-    eprintln!("[cub-perf] rust:{op} {extra}");
+    eprintln!("[maincode-perf] rust:{op} {extra}");
     let mut payload = match extra {
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
@@ -127,7 +127,7 @@ fn restart_watcher(app: &AppHandle, state: &AppState, workdir: &Path) {
                 }
             }
             Err(e) => {
-                eprintln!("[cub-watcher] failed to start: {e}");
+                eprintln!("[maincode-watcher] failed to start: {e}");
                 perf_event(
                     &app,
                     "watcher:error",

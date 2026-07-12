@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Cub (dev)",
+  "productName": "Maincode (dev)",
   "app": {
     "windows": [
       {
-        "title": "Cub (dev)",
+        "title": "Maincode (dev)",
         "width": 1200,
         "height": 800,
         "minWidth": 1200,

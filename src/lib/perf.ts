@@ -1,7 +1,7 @@
 // Lightweight performance logging used across the renderer and bridged from
 // the Rust backend via the `perf:log` Tauri event. Every line is prefixed with
-// `[cub-perf]` so it is easy to grep / copy out of the devtools console.
-const PREFIX = "[cub-perf]";
+// `[maincode-perf]` so it is easy to grep / copy out of the devtools console.
+const PREFIX = "[maincode-perf]";
 
 type PerfExtra = Record<string, unknown> | undefined;
 

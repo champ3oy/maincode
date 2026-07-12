@@ -32,7 +32,7 @@ pub fn start(workdir: &Path, app: AppHandle) -> Result<RepoWatcher, String> {
             }
             Err(errors) => {
                 for err in errors {
-                    eprintln!("[cub-watcher] error: {err}");
+                    eprintln!("[maincode-watcher] error: {err}");
                 }
             }
         },

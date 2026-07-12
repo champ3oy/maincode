@@ -6,10 +6,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(path) = args.iter().find(|a| !a.starts_with('-')) {
         if let Ok(abs) = std::fs::canonicalize(path) {
-            cub_lib::set_launch_path(abs);
+            maincode_lib::set_launch_path(abs);
         } else {
-            eprintln!("[cub] could not resolve path: {path}");
+            eprintln!("[maincode] could not resolve path: {path}");
         }
     }
-    cub_lib::run();
+    maincode_lib::run();
 }
