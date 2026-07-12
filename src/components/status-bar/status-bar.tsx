@@ -50,6 +50,10 @@ import { cn } from "@/lib/utils";
 interface StatusBarProps {
   workdir: string;
   branch: string | null;
+  gitAvailable?: boolean;
+  cursor?: { line: number; col: number } | null;
+  languageLabel?: string | null;
+  dirtyCount?: number;
   onOpenRepo: (path: string) => Promise<string>;
   onBranchSwitched: () => void | Promise<void>;
 }
@@ -63,6 +67,10 @@ function basename(path: string): string {
 export function StatusBar({
   workdir,
   branch,
+  gitAvailable = true,
+  cursor,
+  languageLabel,
+  dirtyCount,
   onOpenRepo,
   onBranchSwitched,
 }: StatusBarProps) {
@@ -80,13 +88,21 @@ export function StatusBar({
           <IconSettings />
         </Button>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="flex items-center gap-1">
           <ProjectSegment workdir={workdir} onOpenRepo={onOpenRepo} />
-          <BranchSegment
-            branch={branch}
-            onBranchSwitched={onBranchSwitched}
-          />
+          {gitAvailable && (
+            <BranchSegment
+              branch={branch}
+              onBranchSwitched={onBranchSwitched}
+            />
+          )}
         </div>
+
+        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          {cursor && <span>Ln {cursor.line}, Col {cursor.col}</span>}
+          {languageLabel && <span>{languageLabel}</span>}
+          {(dirtyCount ?? 0) > 0 && <span>{dirtyCount} unsaved</span>}
+        </span>
       </footer>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />

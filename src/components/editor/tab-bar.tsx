@@ -33,7 +33,10 @@ export function TabBar({ tabs, activePath, onActivate, onClose }: TabBarProps) {
             )}
             <button
               type="button"
-              className="cursor-pointer rounded-sm p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+              className={cn(
+                "cursor-pointer rounded-sm p-0.5 transition-opacity hover:bg-muted group-hover:opacity-100",
+                active ? "opacity-100" : "opacity-0",
+              )}
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(tab.path);

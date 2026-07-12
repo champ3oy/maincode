@@ -33,17 +33,21 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
 
     invoke<number>("pty_spawn", { cwd, cols: term.cols, rows: term.rows })
       .then(async (ptyId) => {
+        const [unOut, unExit] = await Promise.all([
+          listen<string>(`pty-output-${ptyId}`, (e) => term.write(e.payload)),
+          listen(`pty-exit-${ptyId}`, () =>
+            term.write("\r\n[process exited]\r\n"),
+          ),
+        ]);
         if (disposed) {
+          unOut();
+          unExit();
           void invoke("pty_kill", { id: ptyId });
           return;
         }
         id = ptyId;
-        unlistenOut = await listen<string>(`pty-output-${ptyId}`, (e) =>
-          term.write(e.payload),
-        );
-        unlistenExit = await listen(`pty-exit-${ptyId}`, () =>
-          term.write("\r\n[process exited]\r\n"),
-        );
+        unlistenOut = unOut;
+        unlistenExit = unExit;
       })
       .catch((e) => term.write(`\r\nfailed to start shell: ${e}\r\n`));
 

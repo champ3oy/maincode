@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
+import { languageKeyForPath, LANGUAGE_LABELS } from "@/lib/language";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -48,7 +49,7 @@ import { TerminalPanel } from "@/components/terminal/terminal-panel";
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
-  const { openFile, closeTab, handlePathRenamed, activeTab, saveFile } = useEditor();
+  const { openFile, closeTab, handlePathRenamed, activeTab, saveFile, dirtyCount } = useEditor();
   const { addRecent } = useRecentRepos();
   const { setTheme } = useTheme();
   const [gitAvailable, setGitAvailable] = useState(false);
@@ -90,6 +91,9 @@ function App() {
   // Terminal panel state
   const [showTerminal, setShowTerminal] = useState(false);
 
+  // Cursor position for status bar
+  const [cursor, setCursor] = useState<{ line: number; col: number } | null>(null);
+
   // Cmd+K / Cmd+P → toggle command palette; Ctrl+` → toggle terminal
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -106,9 +110,13 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Load workspace files when palette opens
+  // Load workspace files when palette opens; clear stale list on close.
   useEffect(() => {
-    if (!paletteOpen || !rootPath) return;
+    if (!paletteOpen) {
+      setPaletteFiles([]);
+      return;
+    }
+    if (!rootPath) return;
     listFilesRecursive(rootPath)
       .then(setPaletteFiles)
       .catch(() => setPaletteFiles([]));
@@ -140,8 +148,8 @@ function App() {
   );
 
   const handleNameConfirm = useCallback(
-    async (name: string) => {
-      if (!pendingOp) return;
+    async (name: string): Promise<boolean> => {
+      if (!pendingOp) return false;
       try {
         if (pendingOp.kind === "new-file") {
           await createFile(`${pendingOp.dir}/${name}`);
@@ -157,8 +165,11 @@ function App() {
           handlePathRenamed(pendingOp.path, to);
         }
         bumpTree();
+        setPendingOp(null);
+        return true;
       } catch (e) {
         toast.error(`Operation failed: ${e}`);
+        return false;
       }
     },
     [pendingOp, handlePathRenamed, bumpTree],
@@ -359,7 +370,7 @@ function App() {
         title={nameDialogTitle}
         initialValue={nameDialogInitialValue}
         confirmLabel={nameDialogConfirmLabel}
-        onConfirm={(name) => void handleNameConfirm(name)}
+        onConfirm={handleNameConfirm}
         onOpenChange={(o) => {
           if (!o) setPendingOp(null);
         }}
@@ -440,7 +451,7 @@ function App() {
               <ResizablePanel defaultSize="70%">
                 {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
                 <div className={cn(sidebarTab === "changes" && "hidden", "h-full")}>
-                  <EditorArea />
+                  <EditorArea onCursor={(line, col) => setCursor({ line, col })} />
                 </div>
                 {sidebarTab === "changes" && (
                   <DiffPanel
@@ -467,24 +478,29 @@ function App() {
             </ResizablePanelGroup>
           </ResizablePanel>
         </ResizablePanelGroup>
-        {gitAvailable && workdir ? (
+        {gitPending ? (
+          <div className="h-7 border-t border-border" />
+        ) : (
           <StatusBar
-            workdir={workdir}
+            workdir={rootPath}
             branch={branch}
+            gitAvailable={gitAvailable}
+            cursor={cursor}
+            languageLabel={
+              activeTab
+                ? (() => {
+                    const key = languageKeyForPath(activeTab.path);
+                    return key ? LANGUAGE_LABELS[key] : null;
+                  })()
+                : null
+            }
+            dirtyCount={dirtyCount}
             onOpenRepo={async (path: string) => {
               openFolderAndRecord(path);
               return path;
             }}
             onBranchSwitched={handleBranchSwitched}
           />
-        ) : gitPending ? (
-          <div className="h-7 border-t border-border" />
-        ) : (
-          <footer className="flex h-7 items-center border-t border-border px-3">
-            <span className="text-muted-foreground text-xs">
-              {rootName} — not a git repository
-            </span>
-          </footer>
         )}
       </div>
       <CommandPalette

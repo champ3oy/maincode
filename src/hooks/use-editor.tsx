@@ -39,30 +39,30 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   stateRef.current = state;
 
   const openFile = useCallback(async (path: string) => {
-    // Already open → the reducer just activates it (content untouched).
-    if (!stateRef.current.tabs.some((t) => t.path === path)) {
-      const result = await readFile(path).catch((e) => {
-        toast.error(`Failed to open: ${e}`);
-        return null;
-      });
-      if (!result) return;
-      if (result.content === null) {
-        toast.error(
-          result.reason === "too_large"
-            ? "File is larger than 2 MB — not opening it here"
-            : "Cannot open a binary file",
-        );
-        return;
-      }
-      dispatch({
-        type: "open",
-        path,
-        name: basename(path),
-        content: result.content,
-      });
+    // Already open → activate it without touching content.
+    if (stateRef.current.tabs.some((t) => t.path === path)) {
+      dispatch({ type: "activate", path });
       return;
     }
-    dispatch({ type: "open", path, name: basename(path), content: "" });
+    const result = await readFile(path).catch((e) => {
+      toast.error(`Failed to open: ${e}`);
+      return null;
+    });
+    if (!result) return;
+    if (result.content === null) {
+      toast.error(
+        result.reason === "too_large"
+          ? "File is larger than 2 MB — not opening it here"
+          : "Cannot open a binary file",
+      );
+      return;
+    }
+    dispatch({
+      type: "open",
+      path,
+      name: basename(path),
+      content: result.content,
+    });
   }, []);
 
   const editFile = useCallback((path: string, content: string) => {

@@ -14,7 +14,7 @@ interface NameDialogProps {
   title: string;
   initialValue?: string;
   confirmLabel: string;
-  onConfirm: (name: string) => void;
+  onConfirm: (name: string) => Promise<boolean>;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -27,16 +27,22 @@ export function NameDialog({
   onOpenChange,
 }: NameDialogProps) {
   const [value, setValue] = useState(initialValue);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) setValue(initialValue);
   }, [open, initialValue]);
 
-  const submit = () => {
+  const submit = async () => {
     const name = value.trim();
     if (!name || name.includes("/")) return;
-    onConfirm(name);
-    onOpenChange(false);
+    setBusy(true);
+    try {
+      const ok = await onConfirm(name);
+      if (ok) onOpenChange(false);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -48,16 +54,17 @@ export function NameDialog({
         <Input
           autoFocus
           value={value}
+          disabled={busy}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") submit();
+            if (e.key === "Enter") void submit();
           }}
         />
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={submit}>{confirmLabel}</Button>
+          <Button disabled={busy} onClick={() => void submit()}>{confirmLabel}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
