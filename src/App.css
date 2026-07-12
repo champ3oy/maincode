@@ -189,3 +189,11 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+.cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+.cm-editor .cm-scroller {
+  font-family: "App Mono", ui-monospace, monospace;
+}
