@@ -421,7 +421,7 @@ function App() {
           orientation="horizontal"
           className="isolate min-h-0 flex-1 bg-background"
         >
-          <ResizablePanel defaultSize="240px" minSize={180} maxSize={400}>
+          <ResizablePanel defaultSize="240px" minSize={180} maxSize={300}>
             <div className="flex h-full flex-col bg-sidebar">
               {/* Files tab header (New File / New Folder buttons) */}
               {sidebarTab === "files" && (
