@@ -1,5 +1,10 @@
 import { Fragment, useCallback, useRef, useState } from "react";
-import { IconPlus, IconX } from "@tabler/icons-react";
+import {
+  IconLayoutBottombar,
+  IconLayoutSidebarRight,
+  IconPlus,
+  IconX,
+} from "@tabler/icons-react";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -7,16 +12,27 @@ import {
 } from "@/components/ui/resizable";
 import { TerminalPanel } from "./terminal-panel";
 
+export type TerminalPosition = "bottom" | "right";
+
 interface TerminalDockProps {
   cwd: string;
+  /** Where the dock is docked; controls how multiple terminals split. */
+  position: TerminalPosition;
+  onTogglePosition: () => void;
   /** Called when the last terminal is closed, so the panel can hide. */
   onEmpty: () => void;
 }
 
-// Hosts one or more terminals side by side as vertical splits. New terminals
-// are added with "+", each can be closed independently, and closing the last
-// one hides the dock.
-export function TerminalDock({ cwd, onEmpty }: TerminalDockProps) {
+// Hosts one or more terminals. Split direction adapts to the dock position:
+// side by side when docked at the bottom, stacked when docked to the right.
+// New terminals are added with "+", each closes independently, and closing the
+// last one hides the dock.
+export function TerminalDock({
+  cwd,
+  position,
+  onTogglePosition,
+  onEmpty,
+}: TerminalDockProps) {
   const nextId = useRef(1);
   const [terminals, setTerminals] = useState<number[]>([0]);
 
@@ -41,17 +57,37 @@ export function TerminalDock({ cwd, onEmpty }: TerminalDockProps) {
         <span className="text-muted-foreground text-xs font-medium">
           Terminal
         </span>
-        <button
-          type="button"
-          title="New terminal"
-          onClick={addTerminal}
-          className="text-muted-foreground flex size-5 items-center justify-center rounded hover:bg-muted hover:text-foreground"
-        >
-          <IconPlus className="size-3.5" />
-        </button>
+        <div className="text-muted-foreground flex items-center gap-0.5">
+          <button
+            type="button"
+            title={
+              position === "bottom"
+                ? "Move terminal to the side"
+                : "Move terminal to the bottom"
+            }
+            onClick={onTogglePosition}
+            className="flex size-5 items-center justify-center rounded hover:bg-muted hover:text-foreground"
+          >
+            {position === "bottom" ? (
+              <IconLayoutSidebarRight className="size-3.5" />
+            ) : (
+              <IconLayoutBottombar className="size-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            title="New terminal"
+            onClick={addTerminal}
+            className="flex size-5 items-center justify-center rounded hover:bg-muted hover:text-foreground"
+          >
+            <IconPlus className="size-3.5" />
+          </button>
+        </div>
       </div>
       <div className="min-h-0 flex-1">
-        <ResizablePanelGroup orientation="horizontal">
+        <ResizablePanelGroup
+          orientation={position === "right" ? "vertical" : "horizontal"}
+        >
           {terminals.map((id, i) => (
             <Fragment key={id}>
               {i > 0 && <ResizableHandle />}

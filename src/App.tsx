@@ -92,6 +92,9 @@ function App() {
 
   // Terminal panel state
   const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalPosition, setTerminalPosition] = useState<"bottom" | "right">(
+    "bottom",
+  );
 
   // Cursor position for status bar
   const [cursor, setCursor] = useState<{ line: number; col: number } | null>(null);
@@ -474,8 +477,10 @@ function App() {
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel defaultSize="78%">
-            <ResizablePanelGroup orientation="vertical">
-              <ResizablePanel defaultSize="70%">
+            <ResizablePanelGroup
+              orientation={terminalPosition === "right" ? "horizontal" : "vertical"}
+            >
+              <ResizablePanel defaultSize={terminalPosition === "right" ? "62%" : "70%"}>
                 {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
                 <div className={cn(sidebarTab === "changes" && "hidden", "h-full")}>
                   <EditorArea onCursor={(line, col) => setCursor({ line, col })} />
@@ -497,9 +502,18 @@ function App() {
               {showTerminal && (
                 <>
                   <ResizableHandle />
-                  <ResizablePanel defaultSize="30%" minSize={80}>
+                  <ResizablePanel
+                    defaultSize={terminalPosition === "right" ? "38%" : "30%"}
+                    minSize={terminalPosition === "right" ? 240 : 80}
+                  >
                     <TerminalDock
                       cwd={rootPath}
+                      position={terminalPosition}
+                      onTogglePosition={() =>
+                        setTerminalPosition((p) =>
+                          p === "bottom" ? "right" : "bottom",
+                        )
+                      }
                       onEmpty={() => setShowTerminal(false)}
                     />
                   </ResizablePanel>
