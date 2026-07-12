@@ -32,18 +32,6 @@ main path/to/dir  # open a specific folder
 
 Requires `Maincode.app` in `/Applications` (or `~/Applications`).
 
-## Development
-
-Requires [Bun](https://bun.sh) and the [Rust toolchain](https://rustup.rs).
-
-```bash
-bun install
-bun run tauri:dev      # hot-reloading dev build
-bun run tauri build    # production bundle
-bun run test           # frontend unit tests
-(cd src-tauri && cargo test)  # backend tests
-```
-
 ## License
 
-MIT — original work © Ephraim Duncan (cub.dev), modifications © Morpheusdesk.
+MIT — original work © Ephraim Duncan (cub.dev), modifications © Selorm Akoto (maincode).
