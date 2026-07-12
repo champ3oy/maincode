@@ -47,7 +47,7 @@ import {
 import { CommandPalette, type PaletteCommand } from "@/components/command-palette/command-palette";
 import { TerminalPanel } from "@/components/terminal/terminal-panel";
 
-// 
+
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
