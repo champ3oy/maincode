@@ -42,3 +42,12 @@ export function deletePath(path: string): Promise<void> {
 export function listFilesRecursive(root: string, max?: number): Promise<string[]> {
   return invoke<string[]>("list_files_recursive", { root, max });
 }
+
+/** Relative paths of files whose CONTENTS contain `query` (case-insensitive). */
+export function searchFileContents(
+  root: string,
+  query: string,
+  max?: number,
+): Promise<string[]> {
+  return invoke<string[]>("search_file_contents", { root, query, max });
+}

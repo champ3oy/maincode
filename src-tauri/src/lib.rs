@@ -55,6 +55,7 @@ pub fn run() {
             fs_ops::rename_path,
             fs_ops::delete_path,
             fs_ops::list_files_recursive,
+            fs_ops::search_file_contents,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

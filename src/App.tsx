@@ -3,7 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
-import { IconFilePlus, IconFolderPlus, IconSearch, IconX } from "@tabler/icons-react";
+import {
+  IconFilePlus,
+  IconFolderPlus,
+  IconSearch,
+  IconX,
+} from "@tabler/icons-react";
 import { languageKeyForPath, LANGUAGE_LABELS } from "@/lib/language";
 import {
   ResizablePanelGroup,
@@ -44,14 +49,23 @@ import {
   deletePath,
   listFilesRecursive,
 } from "@/lib/fs";
-import { CommandPalette, type PaletteCommand } from "@/components/command-palette/command-palette";
+import {
+  CommandPalette,
+  type PaletteCommand,
+} from "@/components/command-palette/command-palette";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
-
 
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
-  const { openFile, closeTab, handlePathRenamed, activeTab, saveFile, dirtyCount } = useEditor();
+  const {
+    openFile,
+    closeTab,
+    handlePathRenamed,
+    activeTab,
+    saveFile,
+    dirtyCount,
+  } = useEditor();
   const { addRecent } = useRecentRepos();
   const { setTheme } = useTheme();
   const [gitAvailable, setGitAvailable] = useState(false);
@@ -65,9 +79,14 @@ function App() {
   const [scrollNonce, setScrollNonce] = useState(0);
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">("split");
   const [allExpanded, setAllExpanded] = useState(true);
-  const [selectedChangedPath, setSelectedChangedPath] = useState<string | null>(null);
+  const [selectedChangedPath, setSelectedChangedPath] = useState<string | null>(
+    null,
+  );
 
-  const { diffs, loading: diffsLoading } = useDiffs(status?.staged, status?.unstaged);
+  const { diffs, loading: diffsLoading } = useDiffs(
+    status?.staged,
+    status?.unstaged,
+  );
 
   const allFiles = useMemo((): FileEntry[] => {
     if (!status) return [];
@@ -101,7 +120,9 @@ function App() {
   );
 
   // Cursor position for status bar
-  const [cursor, setCursor] = useState<{ line: number; col: number } | null>(null);
+  const [cursor, setCursor] = useState<{ line: number; col: number } | null>(
+    null,
+  );
 
   // Cmd+K / Cmd+P → toggle command palette; Ctrl+` → toggle terminal
   useEffect(() => {
@@ -126,7 +147,9 @@ function App() {
   useEffect(() => {
     const onContextMenu = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target?.closest("input, textarea, [contenteditable='true'], .cm-editor")) {
+      if (
+        target?.closest("input, textarea, [contenteditable='true'], .cm-editor")
+      ) {
         return;
       }
       e.preventDefault();
@@ -234,16 +257,49 @@ function App() {
     if (typeof selected === "string") openFolderAndRecord(selected);
   }, [openFolderAndRecord]);
 
-  const paletteCommands = useMemo<PaletteCommand[]>(() => [
-    { id: "open-folder", label: "Open Folder…", run: () => void handleOpenFolderDialog() },
-    { id: "save", label: "Save Active File", run: () => { if (activeTab) void saveFile(activeTab.path); } },
-    { id: "tab-files", label: "Show Files", run: () => setSidebarTab("files") },
-    { id: "tab-changes", label: "Show Changes", run: () => setSidebarTab("changes") },
-    { id: "theme-light", label: "Theme: Light", run: () => setTheme("light") },
-    { id: "theme-dark", label: "Theme: Dark", run: () => setTheme("dark") },
-    { id: "theme-system", label: "Theme: System", run: () => setTheme("system") },
-    { id: "toggle-terminal", label: "Toggle Terminal", run: () => setShowTerminal((v) => !v) },
-  ], [activeTab, saveFile, setTheme, handleOpenFolderDialog]);
+  const paletteCommands = useMemo<PaletteCommand[]>(
+    () => [
+      {
+        id: "open-folder",
+        label: "Open Folder…",
+        run: () => void handleOpenFolderDialog(),
+      },
+      {
+        id: "save",
+        label: "Save Active File",
+        run: () => {
+          if (activeTab) void saveFile(activeTab.path);
+        },
+      },
+      {
+        id: "tab-files",
+        label: "Show Files",
+        run: () => setSidebarTab("files"),
+      },
+      {
+        id: "tab-changes",
+        label: "Show Changes",
+        run: () => setSidebarTab("changes"),
+      },
+      {
+        id: "theme-light",
+        label: "Theme: Light",
+        run: () => setTheme("light"),
+      },
+      { id: "theme-dark", label: "Theme: Dark", run: () => setTheme("dark") },
+      {
+        id: "theme-system",
+        label: "Theme: System",
+        run: () => setTheme("system"),
+      },
+      {
+        id: "toggle-terminal",
+        label: "Toggle Terminal",
+        run: () => setShowTerminal((v) => !v),
+      },
+    ],
+    [activeTab, saveFile, setTheme, handleOpenFolderDialog],
+  );
 
   // Restore: CLI launch path first, then last opened folder.
   useEffect(() => {
@@ -343,36 +399,80 @@ function App() {
   }, [refresh, workdir]);
 
   // Git staging/commit handlers
-  const handleStage = useCallback(async (path: string) => {
-    try { await stageFile(path); await refresh(); } catch (e) { toast.error(`Stage failed: ${e}`); }
-  }, [refresh]);
+  const handleStage = useCallback(
+    async (path: string) => {
+      try {
+        await stageFile(path);
+        await refresh();
+      } catch (e) {
+        toast.error(`Stage failed: ${e}`);
+      }
+    },
+    [refresh],
+  );
 
-  const handleUnstage = useCallback(async (path: string) => {
-    try { await unstageFile(path); await refresh(); } catch (e) { toast.error(`Unstage failed: ${e}`); }
-  }, [refresh]);
+  const handleUnstage = useCallback(
+    async (path: string) => {
+      try {
+        await unstageFile(path);
+        await refresh();
+      } catch (e) {
+        toast.error(`Unstage failed: ${e}`);
+      }
+    },
+    [refresh],
+  );
 
   const handleStageAll = useCallback(async () => {
-    try { await stageAll(); await refresh(); } catch (e) { toast.error(`Stage all failed: ${e}`); }
+    try {
+      await stageAll();
+      await refresh();
+    } catch (e) {
+      toast.error(`Stage all failed: ${e}`);
+    }
   }, [refresh]);
 
   const handleUnstageAll = useCallback(async () => {
-    try { await unstageAll(); await refresh(); } catch (e) { toast.error(`Unstage all failed: ${e}`); }
-  }, [refresh]);
-
-  const handleCommit = useCallback(async (message: string, options?: CommitOptions) => {
     try {
-      const oid = await commit(message, options);
-      toast.success(`${options?.amend ? "Amended" : "Committed"}: ${oid.slice(0, 7)}`);
+      await unstageAll();
       await refresh();
-    } catch (e) { toast.error(`Commit failed: ${e}`); }
+    } catch (e) {
+      toast.error(`Unstage all failed: ${e}`);
+    }
   }, [refresh]);
 
-  const handleDiscardFile = useCallback(async (path: string) => {
-    const ok = await ask(`Discard changes to ${path}? This cannot be undone.`, { title: "Discard changes", kind: "warning" });
-    if (!ok) return;
-    try { await discardFile(path); await refresh(); toast.success(`Discarded ${path}`); }
-    catch (e) { toast.error(`Discard failed: ${e}`); }
-  }, [refresh]);
+  const handleCommit = useCallback(
+    async (message: string, options?: CommitOptions) => {
+      try {
+        const oid = await commit(message, options);
+        toast.success(
+          `${options?.amend ? "Amended" : "Committed"}: ${oid.slice(0, 7)}`,
+        );
+        await refresh();
+      } catch (e) {
+        toast.error(`Commit failed: ${e}`);
+      }
+    },
+    [refresh],
+  );
+
+  const handleDiscardFile = useCallback(
+    async (path: string) => {
+      const ok = await ask(
+        `Discard changes to ${path}? This cannot be undone.`,
+        { title: "Discard changes", kind: "warning" },
+      );
+      if (!ok) return;
+      try {
+        await discardFile(path);
+        await refresh();
+        toast.success(`Discarded ${path}`);
+      } catch (e) {
+        toast.error(`Discard failed: ${e}`);
+      }
+    },
+    [refresh],
+  );
 
   const handleSelectChangedFile = useCallback((path: string) => {
     setSelectedChangedPath(path);
@@ -412,7 +512,9 @@ function App() {
         <TitleBar
           activeTab={sidebarTab}
           gitAvailable={gitAvailable}
-          changeCount={(status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)}
+          changeCount={
+            (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)
+          }
           onSelectTab={setSidebarTab}
           showTerminal={showTerminal}
           onToggleTerminal={() => setShowTerminal((v) => !v)}
@@ -421,7 +523,7 @@ function App() {
           orientation="horizontal"
           className="isolate min-h-0 flex-1 bg-background"
         >
-          <ResizablePanel defaultSize="240px" minSize={180} maxSize={300}>
+          <ResizablePanel defaultSize="200px" minSize={180} maxSize={300}>
             <div className="flex h-full flex-col bg-sidebar">
               {/* Files tab header (New File / New Folder buttons) */}
               {sidebarTab === "files" && (
@@ -480,7 +582,7 @@ function App() {
                         setTreeSearchOpen(false);
                       }
                     }}
-                    placeholder="Search files…"
+                    placeholder="Search names & contents…"
                     className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-xs outline-none"
                   />
                   {treeSearch && (
@@ -527,12 +629,20 @@ function App() {
           <ResizableHandle />
           <ResizablePanel>
             <ResizablePanelGroup
-              orientation={terminalPosition === "right" ? "horizontal" : "vertical"}
+              orientation={
+                terminalPosition === "right" ? "horizontal" : "vertical"
+              }
             >
-              <ResizablePanel defaultSize={terminalPosition === "right" ? "62%" : "70%"}>
+              <ResizablePanel
+                defaultSize={terminalPosition === "right" ? "62%" : "70%"}
+              >
                 {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
-                <div className={cn(sidebarTab === "changes" && "hidden", "h-full")}>
-                  <EditorArea onCursor={(line, col) => setCursor({ line, col })} />
+                <div
+                  className={cn(sidebarTab === "changes" && "hidden", "h-full")}
+                >
+                  <EditorArea
+                    onCursor={(line, col) => setCursor({ line, col })}
+                  />
                 </div>
                 {sidebarTab === "changes" && (
                   <DiffPanel

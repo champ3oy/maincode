@@ -1,7 +1,12 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { FileTree as PierreFileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
 import { listen } from "@tauri-apps/api/event";
-import { listFilesRecursive, readDir, type DirEntryInfo } from "@/lib/fs";
+import {
+  listFilesRecursive,
+  readDir,
+  searchFileContents,
+  type DirEntryInfo,
+} from "@/lib/fs";
 import { FileTreeContextMenu } from "./file-tree-context-menu";
 
 export type FileOp =
@@ -163,39 +168,62 @@ export function FileTree({
   // file list once, then shows matching files with their folders expanded.
   // Clearing the query restores the normal lazy tree.
   useEffect(() => {
-    const q = searchQuery.trim().toLowerCase();
-    searchingRef.current = q !== "";
+    const q = searchQuery.trim();
+    const ql = q.toLowerCase();
+    searchingRef.current = ql !== "";
     const absRoot = normalizeRoot(rootPath);
 
-    if (q) {
-      wasSearchingRef.current = true;
-      const apply = (all: string[]) => {
-        const matches = all.filter((f) => f.toLowerCase().includes(q));
-        const dirs = new Set<string>();
-        for (const m of matches) for (const d of ancestorDirs(m)) dirs.add(d);
-        expandedModelPaths.current = dirs;
-        setPaths([...dirs, ...matches]);
-      };
-      if (allFilesRef.current) {
-        apply(allFilesRef.current);
-      } else {
-        listFilesRecursive(absRoot)
-          .then((files) => {
-            allFilesRef.current = files;
-            if (searchingRef.current) apply(files);
-          })
+    if (!ql) {
+      if (wasSearchingRef.current) {
+        // Query cleared — restore the normal lazy tree from the root.
+        wasSearchingRef.current = false;
+        loadedDirs.current = new Set([absRoot]);
+        expandedModelPaths.current = new Set();
+        lastHandledRef.current = null;
+        readDir(absRoot)
+          .then((entries) => setPaths(entries.map(toModelPath)))
           .catch(() => {});
       }
-    } else if (wasSearchingRef.current) {
-      // Query cleared — restore the normal lazy tree from the root.
-      wasSearchingRef.current = false;
-      loadedDirs.current = new Set([absRoot]);
-      expandedModelPaths.current = new Set();
-      lastHandledRef.current = null;
-      readDir(absRoot)
-        .then((entries) => setPaths(entries.map(toModelPath)))
-        .catch(() => {});
+      return;
     }
+
+    wasSearchingRef.current = true;
+    let cancelled = false;
+    // Show a set of matching relative file paths, with their folders expanded.
+    const show = (paths: string[]) => {
+      const dirs = new Set<string>();
+      for (const m of paths) for (const d of ancestorDirs(m)) dirs.add(d);
+      expandedModelPaths.current = dirs;
+      setPaths([...dirs, ...paths]);
+    };
+    const nameMatches = (all: string[]) =>
+      all.filter((f) => f.toLowerCase().includes(ql));
+
+    // Phase 1: instant name/folder matches from the cached file list.
+    if (allFilesRef.current) show(nameMatches(allFilesRef.current));
+
+    // Phase 2 (debounced): ensure the list is loaded, then union in files
+    // whose CONTENTS match (a backend grep).
+    const timer = setTimeout(async () => {
+      let list = allFilesRef.current;
+      if (!list) {
+        list = await listFilesRecursive(absRoot).catch(() => []);
+        allFilesRef.current = list;
+        if (cancelled) return;
+        show(nameMatches(list));
+      }
+      const content = await searchFileContents(absRoot, q).catch(() => []);
+      if (cancelled) return;
+      const union = Array.from(
+        new Set([...nameMatches(list), ...content]),
+      ).sort();
+      show(union);
+    }, 200);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [searchQuery, rootPath, toModelPath]);
 
   // refreshNonce prop: bump to force reload

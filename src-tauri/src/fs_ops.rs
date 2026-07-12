@@ -38,6 +38,65 @@ pub fn list_files_recursive(root: String, max: Option<usize>) -> Result<Vec<Stri
     Ok(list_files_inner(Path::new(&root), max.unwrap_or(5000)))
 }
 
+// Skip files larger than this when searching contents (keeps search snappy).
+const MAX_SEARCH_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Recursively search file *contents* for `query` (case-insensitive), skipping
+/// ignored dirs and binary/large files. Returns matching relative file paths.
+pub fn search_contents_inner(root: &Path, query: &str, max: usize) -> Vec<String> {
+    let needle = query.to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= max {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            if out.len() >= max {
+                break;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                if !SKIP_DIRS.contains(&name.as_str()) {
+                    stack.push(entry.path());
+                }
+            } else if ft.is_file() {
+                let path = entry.path();
+                let Ok(meta) = fs::metadata(&path) else { continue };
+                if meta.len() > MAX_SEARCH_FILE_BYTES {
+                    continue;
+                }
+                let Ok(bytes) = fs::read(&path) else { continue };
+                if bytes.contains(&0) {
+                    continue; // skip binary files
+                }
+                let Ok(text) = String::from_utf8(bytes) else { continue };
+                if text.to_lowercase().contains(&needle) {
+                    if let Ok(rel) = path.strip_prefix(root) {
+                        out.push(rel.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[tauri::command]
+pub fn search_file_contents(
+    root: String,
+    query: String,
+    max: Option<usize>,
+) -> Result<Vec<String>, String> {
+    Ok(search_contents_inner(Path::new(&root), &query, max.unwrap_or(500)))
+}
+
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -278,5 +337,19 @@ mod tests {
         assert_eq!(files, vec!["src/deep/a.rs", "top.txt"]);
         let capped = list_files_inner(tmp.path(), 1);
         assert_eq!(capped.len(), 1);
+    }
+
+    #[test]
+    fn search_contents_matches_text_skips_binary_and_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::create_dir_all(tmp.path().join("node_modules")).unwrap();
+        fs::write(tmp.path().join("src/a.ts"), "const needle = 1;").unwrap();
+        fs::write(tmp.path().join("src/b.ts"), "no match here").unwrap();
+        fs::write(tmp.path().join("bin.dat"), [0u8, b'n', b'e', b'e']).unwrap();
+        fs::write(tmp.path().join("node_modules/skip.js"), "needle").unwrap();
+        let hits = search_contents_inner(tmp.path(), "NEEDLE", 100);
+        assert_eq!(hits, vec!["src/a.ts"]); // case-insensitive; binary + node_modules skipped
+        assert!(search_contents_inner(tmp.path(), "", 100).is_empty());
     }
 }
