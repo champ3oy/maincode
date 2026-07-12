@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::process::Child;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::thread;
 use std::time::Instant;
 
-use git2::build::{CheckoutBuilder, RepoBuilder};
-use git2::{BranchType, DiffFormat, FetchOptions, Index, Patch, RemoteCallbacks, Repository, Status, StatusOptions, Tree};
+use git2::build::CheckoutBuilder;
+use git2::{BranchType, Index, Patch, Repository, Status, StatusOptions, Tree};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -32,14 +31,8 @@ fn ms_since(start: Instant) -> f64 {
 
 pub struct AppState {
     pub repo: Mutex<Option<Repository>>,
-    pub bridge: Mutex<Option<Child>>,
-    pub event_listener: Mutex<Option<JoinHandle<()>>>,
-    pub event_listener_stop: Arc<AtomicBool>,
-    pub clone_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub watcher: Mutex<Option<crate::watcher::RepoWatcher>>,
     pub watcher_generation: AtomicU64,
-    pub walker_generation: Arc<AtomicU64>,
-    pub walker_cancel: Arc<AtomicBool>,
 }
 
 fn restart_watcher(app: &AppHandle, state: &AppState, workdir: &Path) {
@@ -176,51 +169,102 @@ pub struct RepoStatus {
     pub untracked: Vec<String>,
 }
 
-#[derive(Serialize)]
-pub struct BranchDiff {
-    pub base_ref: String,
-    pub base_oid: String,
-    pub head_oid: String,
-    pub files: Vec<FileEntry>,
+enum CountDiffKind {
+    /// HEAD tree → index.
+    StagedAgainstHead(Option<git2::Oid>),
+    /// index → workdir.
+    Unstaged,
 }
 
-fn resolve_base_ref(repo: &Repository) -> Option<(String, git2::Oid)> {
-    if let Ok(reference) = repo.find_reference("refs/remotes/origin/HEAD") {
-        if let Some(target) = reference.symbolic_target() {
-            if let Ok(resolved) = repo.find_reference(target) {
-                if let Some(oid) = resolved.target() {
-                    let short = target
-                        .strip_prefix("refs/remotes/")
-                        .unwrap_or(target)
-                        .to_string();
-                    return Some((short, oid));
-                }
-            }
+fn build_diff_for_count<'a>(
+    repo: &'a Repository,
+    kind: &CountDiffKind,
+) -> Result<git2::Diff<'a>, git2::Error> {
+    match kind {
+        CountDiffKind::StagedAgainstHead(tree_oid) => {
+            let tree = tree_oid.and_then(|oid| repo.find_tree(oid).ok());
+            repo.diff_tree_to_index(tree.as_ref(), None, None)
         }
+        CountDiffKind::Unstaged => repo.diff_index_to_workdir(None, None),
     }
-
-    const FALLBACK_NAMES: &[&str] = &["main", "master", "trunk"];
-    for name in FALLBACK_NAMES {
-        let remote_full = format!("refs/remotes/origin/{name}");
-        if let Ok(reference) = repo.find_reference(&remote_full) {
-            if let Some(oid) = reference.target() {
-                return Some((format!("origin/{name}"), oid));
-            }
-        }
-    }
-    for name in FALLBACK_NAMES {
-        let local_full = format!("refs/heads/{name}");
-        if let Ok(reference) = repo.find_reference(&local_full) {
-            if let Some(oid) = reference.target() {
-                return Some(((*name).to_string(), oid));
-            }
-        }
-    }
-    None
 }
 
-/// Open a git repository at `path` and store it in app state.
-/// Returns the absolute workdir path on success.
+/// Compute per-file `(additions, deletions)` for a diff in parallel. Each
+/// worker opens its own `Repository` and re-creates the diff (cheap: ~ms),
+/// then computes `Patch::from_diff` on its slice of delta indexes. git2's
+/// `Diff` is `!Send`/`!Sync`, so this is the only way to split xdiff work
+/// across cores — which matters because xdiff for 600+ files is CPU-bound
+/// and was pinning a single core at ~300ms.
+fn count_diff_lines_parallel(
+    workdir: &Path,
+    kind: CountDiffKind,
+    delta_count: usize,
+) -> HashMap<String, (u32, u32)> {
+    if delta_count == 0 {
+        return HashMap::new();
+    }
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4)
+        .min(delta_count);
+    let chunk_size = delta_count.div_ceil(num_threads);
+    let kind_ref = &kind;
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = (0..delta_count)
+            .step_by(chunk_size)
+            .map(|start| {
+                let end = (start + chunk_size).min(delta_count);
+                s.spawn(move || -> HashMap<String, (u32, u32)> {
+                    let Ok(repo) = Repository::open(workdir) else {
+                        return HashMap::new();
+                    };
+                    let Ok(diff) = build_diff_for_count(&repo, kind_ref) else {
+                        return HashMap::new();
+                    };
+                    let mut counts = HashMap::new();
+                    for idx in start..end {
+                        let Some(delta) = diff.get_delta(idx) else {
+                            continue;
+                        };
+                        let Some(path) = delta
+                            .new_file()
+                            .path()
+                            .or_else(|| delta.old_file().path())
+                            .and_then(|p| p.to_str())
+                            .map(str::to_owned)
+                        else {
+                            continue;
+                        };
+                        let Ok(Some(patch)) = Patch::from_diff(&diff, idx) else {
+                            continue;
+                        };
+                        let Ok((_, adds, dels)) = patch.line_stats() else {
+                            continue;
+                        };
+                        counts.insert(
+                            path,
+                            (
+                                u32::try_from(adds).unwrap_or(u32::MAX),
+                                u32::try_from(dels).unwrap_or(u32::MAX),
+                            ),
+                        );
+                    }
+                    counts
+                })
+            })
+            .collect();
+
+        let mut merged = HashMap::with_capacity(delta_count);
+        for handle in handles {
+            if let Ok(map) = handle.join() {
+                merged.extend(map);
+            }
+        }
+        merged
+    })
+}
+
 #[tauri::command]
 pub fn open_repo(path: String, app: AppHandle, state: State<AppState>) -> Result<String, String> {
     let total_start = Instant::now();
@@ -315,109 +359,6 @@ pub fn open_repo(path: String, app: AppHandle, state: State<AppState>) -> Result
         }),
     );
     Ok(workdir)
-}
-
-enum CountDiffKind {
-    /// HEAD tree → index.
-    StagedAgainstHead(Option<git2::Oid>),
-    /// index → workdir.
-    Unstaged,
-    /// base tree → head tree (branch diff).
-    TwoTrees(git2::Oid, git2::Oid),
-}
-
-fn build_diff_for_count<'a>(
-    repo: &'a Repository,
-    kind: &CountDiffKind,
-) -> Result<git2::Diff<'a>, git2::Error> {
-    match kind {
-        CountDiffKind::StagedAgainstHead(tree_oid) => {
-            let tree = tree_oid.and_then(|oid| repo.find_tree(oid).ok());
-            repo.diff_tree_to_index(tree.as_ref(), None, None)
-        }
-        CountDiffKind::Unstaged => repo.diff_index_to_workdir(None, None),
-        CountDiffKind::TwoTrees(base_oid, head_oid) => {
-            let base_tree = repo.find_tree(*base_oid)?;
-            let head_tree = repo.find_tree(*head_oid)?;
-            repo.diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)
-        }
-    }
-}
-
-/// Compute per-file `(additions, deletions)` for a diff in parallel. Each
-/// worker opens its own `Repository` and re-creates the diff (cheap: ~ms),
-/// then computes `Patch::from_diff` on its slice of delta indexes. git2's
-/// `Diff` is `!Send`/`!Sync`, so this is the only way to split xdiff work
-/// across cores — which matters because xdiff for 600+ files is CPU-bound
-/// and was pinning a single core at ~300ms.
-fn count_diff_lines_parallel(
-    workdir: &Path,
-    kind: CountDiffKind,
-    delta_count: usize,
-) -> HashMap<String, (u32, u32)> {
-    if delta_count == 0 {
-        return HashMap::new();
-    }
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(4)
-        .min(delta_count);
-    let chunk_size = delta_count.div_ceil(num_threads);
-    let kind_ref = &kind;
-
-    std::thread::scope(|s| {
-        let handles: Vec<_> = (0..delta_count)
-            .step_by(chunk_size)
-            .map(|start| {
-                let end = (start + chunk_size).min(delta_count);
-                s.spawn(move || -> HashMap<String, (u32, u32)> {
-                    let Ok(repo) = Repository::open(workdir) else {
-                        return HashMap::new();
-                    };
-                    let Ok(diff) = build_diff_for_count(&repo, kind_ref) else {
-                        return HashMap::new();
-                    };
-                    let mut counts = HashMap::new();
-                    for idx in start..end {
-                        let Some(delta) = diff.get_delta(idx) else {
-                            continue;
-                        };
-                        let Some(path) = delta
-                            .new_file()
-                            .path()
-                            .or_else(|| delta.old_file().path())
-                            .and_then(|p| p.to_str())
-                            .map(str::to_owned)
-                        else {
-                            continue;
-                        };
-                        let Ok(Some(patch)) = Patch::from_diff(&diff, idx) else {
-                            continue;
-                        };
-                        let Ok((_, adds, dels)) = patch.line_stats() else {
-                            continue;
-                        };
-                        counts.insert(
-                            path,
-                            (
-                                u32::try_from(adds).unwrap_or(u32::MAX),
-                                u32::try_from(dels).unwrap_or(u32::MAX),
-                            ),
-                        );
-                    }
-                    counts
-                })
-            })
-            .collect();
-
-        let mut merged = HashMap::with_capacity(delta_count);
-        for handle in handles {
-            if let Ok(map) = handle.join() {
-                merged.extend(map);
-            }
-        }
-        merged
-    })
 }
 
 #[tauri::command]
@@ -597,105 +538,6 @@ pub fn get_repo_status(app: AppHandle, state: State<AppState>) -> Result<RepoSta
     })
 }
 
-#[tauri::command]
-pub fn get_branch_diff(state: State<AppState>) -> Result<Option<BranchDiff>, String> {
-    let workdir_path: PathBuf;
-    let base_ref: String;
-    let base_oid: git2::Oid;
-    let head_oid: git2::Oid;
-    let base_tree_oid: git2::Oid;
-    let head_tree_oid: git2::Oid;
-    let status_entries: Vec<(String, ChangeKind)>;
-    let delta_count: usize;
-
-    {
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
-
-        let Some((short_name, candidate_oid)) = resolve_base_ref(repo) else {
-            return Ok(None);
-        };
-
-        let head_obj = repo
-            .head()
-            .map_err(|e| format!("failed to read HEAD: {e}"))?
-            .peel_to_commit()
-            .map_err(|e| format!("failed to peel HEAD: {e}"))?;
-        let head_commit_oid = head_obj.id();
-
-        let merge_base_oid = repo
-            .merge_base(head_commit_oid, candidate_oid)
-            .map_err(|e| format!("failed to find merge base: {e}"))?;
-
-        let base_commit = repo
-            .find_commit(merge_base_oid)
-            .map_err(|e| format!("failed to find base commit: {e}"))?;
-        let head_commit = repo
-            .find_commit(head_commit_oid)
-            .map_err(|e| format!("failed to find head commit: {e}"))?;
-
-        let base_tree = base_commit
-            .tree()
-            .map_err(|e| format!("failed to get base tree: {e}"))?;
-        let head_tree = head_commit
-            .tree()
-            .map_err(|e| format!("failed to get head tree: {e}"))?;
-
-        let diff = repo
-            .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), None)
-            .map_err(|e| format!("failed to diff trees: {e}"))?;
-
-        let mut entries: Vec<(String, ChangeKind)> = Vec::new();
-        for delta in diff.deltas() {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .and_then(|p| p.to_str())
-                .map(str::to_owned);
-            let Some(path) = path else { continue };
-            let kind = match delta.status() {
-                git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => ChangeKind::Added,
-                git2::Delta::Deleted => ChangeKind::Deleted,
-                git2::Delta::Renamed => ChangeKind::Renamed,
-                git2::Delta::Typechange => ChangeKind::Typechange,
-                _ => ChangeKind::Modified,
-            };
-            entries.push((path, kind));
-        }
-
-        base_ref = short_name;
-        base_oid = merge_base_oid;
-        head_oid = head_commit_oid;
-        base_tree_oid = base_tree.id();
-        head_tree_oid = head_tree.id();
-        delta_count = entries.len();
-        status_entries = entries;
-    }
-
-    let counts = count_diff_lines_parallel(
-        &workdir_path,
-        CountDiffKind::TwoTrees(base_tree_oid, head_tree_oid),
-        delta_count,
-    );
-
-    let files: Vec<FileEntry> = status_entries
-        .into_iter()
-        .map(|(path, kind)| {
-            let (additions, deletions) = counts.get(&path).copied().unwrap_or((0, 0));
-            FileEntry { path, kind, additions, deletions }
-        })
-        .collect();
-
-    Ok(Some(BranchDiff {
-        base_ref,
-        base_oid: base_oid.to_string(),
-        head_oid: head_oid.to_string(),
-        files,
-    }))
-}
-
 /// Return the old (HEAD) and new (workdir) contents of a file for client-side diffing.
 /// This gives `@pierre/diffs` `parseDiffFromFile` full file contents so hunk
 /// expansion and custom hunk separators work correctly.
@@ -797,6 +639,7 @@ fn read_workdir_file(workdir: &Path, path: &Path) -> Result<FileSideContent, Str
     // the workdir. Avoids the per-file `canonicalize()` (5+ stat syscalls per
     // path) that previously dominated `get_file_contents_batch:readMs`.
     validate_repo_relative_path(path)?;
+
     let abs = workdir.join(path);
     // Component filter blocks `..` but not symlinks; a tracked file like
     // `evil.txt -> /etc/passwd` would otherwise be followed by `fs::read`.
@@ -974,107 +817,6 @@ pub fn get_file_contents_batch(
             "totalMs": ms_since(total_start),
         }),
     );
-
-    Ok(responses)
-}
-
-#[tauri::command]
-pub fn get_branch_file_contents_batch(
-    base_oid: String,
-    head_oid: String,
-    requests: Vec<String>,
-    state: State<AppState>,
-) -> Result<Vec<FileContentsBatchItem>, String> {
-    let requested_count = requests.len();
-    let workdir_path: PathBuf = {
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        repo.workdir().ok_or("bare repository")?.to_path_buf()
-    };
-
-    let base_commit_oid = git2::Oid::from_str(&base_oid)
-        .map_err(|e| format!("invalid base_oid: {e}"))?;
-    let head_commit_oid = git2::Oid::from_str(&head_oid)
-        .map_err(|e| format!("invalid head_oid: {e}"))?;
-
-    if requested_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(4)
-        .min(requested_count);
-    let chunk_size = requested_count.div_ceil(num_threads.max(1));
-    let workdir: &Path = &workdir_path;
-
-    let responses: Vec<FileContentsBatchItem> = std::thread::scope(|s| {
-        let handles: Vec<_> = requests
-            .chunks(chunk_size)
-            .map(|chunk| {
-                s.spawn(move || -> Vec<FileContentsBatchItem> {
-                    let repo = match Repository::open(workdir) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return chunk
-                                .iter()
-                                .map(|p| FileContentsBatchItem {
-                                    path: p.clone(),
-                                    response: None,
-                                    error: Some(format!("worker repo open failed: {e}")),
-                                })
-                                .collect();
-                        }
-                    };
-                    let base_tree = repo
-                        .find_commit(base_commit_oid)
-                        .ok()
-                        .and_then(|c| c.tree().ok());
-                    let head_tree = repo
-                        .find_commit(head_commit_oid)
-                        .ok()
-                        .and_then(|c| c.tree().ok());
-
-                    let mut out = Vec::with_capacity(chunk.len());
-                    for path in chunk {
-                        let relative_path = Path::new(path);
-                        let result = (|| -> Result<FileContentsResponse, String> {
-                            let old_side = read_tree_file(&repo, base_tree.as_ref(), relative_path)?;
-                            let new_side = read_tree_file(&repo, head_tree.as_ref(), relative_path)?;
-                            Ok(FileContentsResponse {
-                                name: path.clone(),
-                                old_content: old_side.content,
-                                old_binary: old_side.is_binary,
-                                new_content: new_side.content,
-                                new_binary: new_side.is_binary,
-                            })
-                        })();
-                        out.push(match result {
-                            Ok(response) => FileContentsBatchItem {
-                                path: path.clone(),
-                                response: Some(response),
-                                error: None,
-                            },
-                            Err(error) => FileContentsBatchItem {
-                                path: path.clone(),
-                                response: None,
-                                error: Some(error),
-                            },
-                        });
-                    }
-                    out
-                })
-            })
-            .collect();
-
-        let mut all = Vec::with_capacity(requested_count);
-        for handle in handles {
-            if let Ok(chunk) = handle.join() {
-                all.extend(chunk);
-            }
-        }
-        all
-    });
 
     Ok(responses)
 }
@@ -1508,153 +1250,6 @@ pub fn commit(
     Ok(oid.to_string())
 }
 
-#[derive(Serialize, Clone)]
-pub struct CloneProgress {
-    pub id: String,
-    pub phase: &'static str,
-    pub received_objects: usize,
-    pub total_objects: usize,
-    pub indexed_objects: usize,
-    pub received_bytes: usize,
-    pub checkout_current: usize,
-    pub checkout_total: usize,
-}
-
-#[tauri::command]
-pub fn clone_repo(
-    url: String,
-    dest: String,
-    id: String,
-    app: AppHandle,
-    state: State<AppState>,
-) -> Result<String, String> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    state
-        .clone_cancels
-        .lock()
-        .map_err(|e| format!("lock poisoned: {e}"))?
-        .insert(id.clone(), cancel.clone());
-
-    let result = (|| -> Result<Repository, String> {
-        let mut cb = RemoteCallbacks::new();
-        let a1 = app.clone();
-        let i1 = id.clone();
-        let c1 = cancel.clone();
-        cb.transfer_progress(move |p| {
-            if c1.load(Ordering::SeqCst) {
-                return false;
-            }
-            let _ = a1.emit(
-                "clone:progress",
-                CloneProgress {
-                    id: i1.clone(),
-                    phase: "fetch",
-                    received_objects: p.received_objects(),
-                    total_objects: p.total_objects(),
-                    indexed_objects: p.indexed_objects(),
-                    received_bytes: p.received_bytes(),
-                    checkout_current: 0,
-                    checkout_total: 0,
-                },
-            );
-            true
-        });
-        let mut fo = FetchOptions::new();
-        fo.remote_callbacks(cb);
-
-        let mut co = CheckoutBuilder::new();
-        let a2 = app.clone();
-        let i2 = id.clone();
-        let c2 = cancel.clone();
-        co.progress(move |_, cur, tot| {
-            if c2.load(Ordering::SeqCst) {
-                return;
-            }
-            let _ = a2.emit(
-                "clone:progress",
-                CloneProgress {
-                    id: i2.clone(),
-                    phase: "checkout",
-                    received_objects: 0,
-                    total_objects: 0,
-                    indexed_objects: 0,
-                    received_bytes: 0,
-                    checkout_current: cur,
-                    checkout_total: tot,
-                },
-            );
-        });
-
-        RepoBuilder::new()
-            .fetch_options(fo)
-            .with_checkout(co)
-            .clone(&url, Path::new(&dest))
-            .map_err(|e| {
-                if cancel.load(Ordering::SeqCst) {
-                    "clone cancelled".to_string()
-                } else {
-                    format!("clone failed: {e}")
-                }
-            })
-    })();
-
-    if let Ok(mut guard) = state.clone_cancels.lock() {
-        guard.remove(&id);
-    }
-
-    let repo = result?;
-    let workdir_path = repo
-        .workdir()
-        .ok_or_else(|| "bare repositories are not supported".to_string())?
-        .to_path_buf();
-    let workdir = workdir_path.to_string_lossy().to_string();
-    *state
-        .repo
-        .lock()
-        .map_err(|e| format!("lock poisoned: {e}"))? = Some(repo);
-    restart_watcher(&app, state.inner(), &workdir_path);
-    Ok(workdir)
-}
-
-#[tauri::command]
-pub fn cancel_clone(id: String, state: State<AppState>) -> Result<(), String> {
-    if let Some(flag) = state
-        .clone_cancels
-        .lock()
-        .map_err(|e| format!("lock poisoned: {e}"))?
-        .get(&id)
-    {
-        flag.store(true, Ordering::SeqCst);
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn cleanup_path(path: String) -> Result<(), String> {
-    let p = Path::new(&path);
-    if p.exists() {
-        std::fs::remove_dir_all(p).map_err(|e| format!("cleanup failed: {e}"))?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn init_repo(path: String, app: AppHandle, state: State<AppState>) -> Result<String, String> {
-    std::fs::create_dir_all(&path).map_err(|e| format!("mkdir failed: {e}"))?;
-    let repo = Repository::init(&path).map_err(|e| format!("init failed: {e}"))?;
-    let workdir_path = repo
-        .workdir()
-        .ok_or_else(|| "bare repositories are not supported".to_string())?
-        .to_path_buf();
-    let workdir = workdir_path.to_string_lossy().to_string();
-    *state
-        .repo
-        .lock()
-        .map_err(|e| format!("lock poisoned: {e}"))? = Some(repo);
-    restart_watcher(&app, state.inner(), &workdir_path);
-    Ok(workdir)
-}
-
 #[tauri::command]
 pub fn get_repo_branch(path: String) -> Result<Option<String>, String> {
     let repo = Repository::discover(&path).map_err(|e| format!("open: {e}"))?;
@@ -1832,315 +1427,7 @@ pub fn checkout_branch(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// History tab support: HEAD probe, commit details, commit diff, root-commit
-// file contents, and a streaming revwalk that emits commit-graph chunks.
-// ---------------------------------------------------------------------------
-
-const GRAPH_CHUNK_SIZE: usize = 1000;
-
-#[derive(Serialize)]
-pub struct HeadState {
-    pub branch: Option<String>,
-    pub head_oid: String,
-}
-
-#[derive(Serialize, Clone)]
-pub struct CommitDetails {
-    pub oid: String,
-    pub subject: String,
-    pub body: String,
-    pub author_name: String,
-    pub author_email: String,
-    pub author_timestamp: i64,
-    pub committer_name: String,
-    pub committer_email: String,
-    pub committer_timestamp: i64,
-}
-
-#[derive(Serialize)]
-pub struct CommitDiff {
-    pub parent_oid: Option<String>,
-    pub files: Vec<FileEntry>,
-}
-
-#[derive(Serialize)]
-pub struct CommitPatch {
-    pub parent_oid: Option<String>,
-    pub files: Vec<FileEntry>,
-    pub patch: String,
-}
-
-#[derive(Serialize)]
-pub struct ListCommitsStreamAck {
-    pub request_id: String,
-    pub total_estimate: Option<u64>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct CommitGraphRow {
-    pub oid: String,
-    pub parents: Vec<String>,
-    pub refs: Vec<String>,
-    pub subject: String,
-    pub author_name: String,
-    pub author_email: String,
-    pub author_timestamp: i64,
-    pub committer_name: String,
-    pub committer_email: String,
-    pub committer_timestamp: i64,
-}
-
-#[tauri::command]
-pub fn get_head_state(state: State<AppState>) -> Result<HeadState, String> {
-    let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-    let repo = lock.as_ref().ok_or("no repository open")?;
-
-    let head = repo
-        .head()
-        .map_err(|e| format!("failed to read HEAD: {e}"))?;
-    let branch = if head.is_branch() {
-        head.shorthand().map(str::to_owned)
-    } else {
-        None
-    };
-    let head_oid = head
-        .peel_to_commit()
-        .map_err(|e| format!("failed to peel HEAD: {e}"))?
-        .id()
-        .to_string();
-
-    Ok(HeadState { branch, head_oid })
-}
-
-fn commit_details_from_commit(
-    oid: git2::Oid,
-    commit: &git2::Commit<'_>,
-    include_body: bool,
-) -> CommitDetails {
-    let message_bytes = commit.message_bytes();
-    let subject_end = message_bytes
-        .iter()
-        .position(|b| *b == b'\n')
-        .unwrap_or(message_bytes.len());
-    let subject = String::from_utf8_lossy(&message_bytes[..subject_end])
-        .trim_end()
-        .to_owned();
-    let body = if include_body && subject_end < message_bytes.len() {
-        String::from_utf8_lossy(&message_bytes[subject_end + 1..])
-            .trim_end()
-            .to_owned()
-    } else {
-        String::new()
-    };
-    let author = commit.author();
-    let committer = commit.committer();
-
-    CommitDetails {
-        oid: oid.to_string(),
-        subject,
-        body,
-        author_name: String::from_utf8_lossy(author.name_bytes()).into_owned(),
-        author_email: String::from_utf8_lossy(author.email_bytes()).into_owned(),
-        author_timestamp: author.when().seconds() as i64,
-        committer_name: String::from_utf8_lossy(committer.name_bytes()).into_owned(),
-        committer_email: String::from_utf8_lossy(committer.email_bytes()).into_owned(),
-        committer_timestamp: committer.when().seconds() as i64,
-    }
-}
-
-#[tauri::command]
-pub fn get_commit_details_batch(
-    oids: Vec<String>,
-    app: AppHandle,
-    state: State<AppState>,
-) -> Result<Vec<CommitDetails>, String> {
-    let total_start = Instant::now();
-    let requested_count = oids.len();
-    let workdir_path: PathBuf = {
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        repo.workdir().ok_or("bare repository")?.to_path_buf()
-    };
-
-    if requested_count == 0 {
-        perf_event(
-            &app,
-            "get_commit_details_batch",
-            json!({ "requested": 0, "returned": 0, "totalMs": 0.0 }),
-        );
-        return Ok(Vec::new());
-    }
-
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(4)
-        .min(requested_count);
-    let chunk_size = requested_count.div_ceil(num_threads.max(1));
-    let workdir: &Path = &workdir_path;
-
-    let details: Vec<CommitDetails> = std::thread::scope(|s| {
-        let handles: Vec<_> = oids
-            .chunks(chunk_size)
-            .map(|chunk| {
-                s.spawn(move || -> Vec<CommitDetails> {
-                    let Ok(repo) = Repository::open(workdir) else {
-                        return Vec::new();
-                    };
-                    let mut out = Vec::with_capacity(chunk.len());
-                    for oid_str in chunk {
-                        let Ok(oid) = git2::Oid::from_str(oid_str) else {
-                            continue;
-                        };
-                        let Ok(commit) = repo.find_commit(oid) else {
-                            continue;
-                        };
-                        out.push(commit_details_from_commit(oid, &commit, true));
-                    }
-                    out
-                })
-            })
-            .collect();
-
-        let mut all = Vec::with_capacity(requested_count);
-        for handle in handles {
-            if let Ok(chunk) = handle.join() {
-                all.extend(chunk);
-            }
-        }
-        all
-    });
-
-    perf_event(
-        &app,
-        "get_commit_details_batch",
-        json!({
-            "requested": requested_count,
-            "returned": details.len(),
-            "totalMs": ms_since(total_start),
-        }),
-    );
-
-    Ok(details)
-}
-
-#[tauri::command]
-pub fn get_commit_diff(oid: String, state: State<AppState>) -> Result<CommitDiff, String> {
-    let commit_oid = git2::Oid::from_str(&oid).map_err(|e| format!("invalid oid: {e}"))?;
-
-    let workdir_path: PathBuf;
-    let parent_oid_opt: Option<git2::Oid>;
-    let parent_tree_oid_opt: Option<git2::Oid>;
-    let commit_tree_oid: git2::Oid;
-    let status_entries: Vec<(String, ChangeKind)>;
-    let delta_count: usize;
-    let root_line_counts: Option<HashMap<String, (u32, u32)>>;
-
-    {
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
-
-        let commit = repo
-            .find_commit(commit_oid)
-            .map_err(|e| format!("failed to find commit: {e}"))?;
-        let commit_tree = commit
-            .tree()
-            .map_err(|e| format!("failed to get commit tree: {e}"))?;
-
-        let (parent_oid, parent_tree) = if commit.parent_count() == 0 {
-            (None, None)
-        } else {
-            let parent = commit
-                .parent(0)
-                .map_err(|e| format!("failed to get parent: {e}"))?;
-            let parent_tree = parent
-                .tree()
-                .map_err(|e| format!("failed to get parent tree: {e}"))?;
-            (Some(parent.id()), Some(parent_tree))
-        };
-
-        let diff = repo
-            .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None)
-            .map_err(|e| format!("failed to diff trees: {e}"))?;
-
-        let mut entries: Vec<(String, ChangeKind)> = Vec::new();
-        for delta in diff.deltas() {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .and_then(|p| p.to_str())
-                .map(str::to_owned);
-            let Some(path) = path else { continue };
-            let kind = match delta.status() {
-                git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => ChangeKind::Added,
-                git2::Delta::Deleted => ChangeKind::Deleted,
-                git2::Delta::Renamed => ChangeKind::Renamed,
-                git2::Delta::Typechange => ChangeKind::Typechange,
-                _ => ChangeKind::Modified,
-            };
-            entries.push((path, kind));
-        }
-
-        delta_count = entries.len();
-        status_entries = entries;
-        commit_tree_oid = commit_tree.id();
-        parent_tree_oid_opt = parent_tree.as_ref().map(|t| t.id());
-        parent_oid_opt = parent_oid;
-
-        // Root commits have no parent tree, so `count_diff_lines_parallel`'s
-        // `TwoTrees` variant cannot represent the (None, commit_tree) diff.
-        // TODO: extend CountDiffKind to handle a None base tree; for now sum
-        // `Patch::from_diff` line stats on this thread. Root commits are rare
-        // and the file set is bounded by the initial commit size.
-        if parent_tree_oid_opt.is_none() {
-            let mut counts: HashMap<String, (u32, u32)> = HashMap::with_capacity(delta_count);
-            for (idx, (path, _)) in status_entries.iter().enumerate() {
-                let Ok(Some(patch)) = Patch::from_diff(&diff, idx) else {
-                    continue;
-                };
-                let Ok((_, adds, dels)) = patch.line_stats() else {
-                    continue;
-                };
-                counts.insert(
-                    path.clone(),
-                    (
-                        u32::try_from(adds).unwrap_or(u32::MAX),
-                        u32::try_from(dels).unwrap_or(u32::MAX),
-                    ),
-                );
-            }
-            root_line_counts = Some(counts);
-        } else {
-            root_line_counts = None;
-        }
-    }
-
-    let counts = match (parent_tree_oid_opt, root_line_counts) {
-        (Some(parent_tree_oid), _) => count_diff_lines_parallel(
-            &workdir_path,
-            CountDiffKind::TwoTrees(parent_tree_oid, commit_tree_oid),
-            delta_count,
-        ),
-        (None, Some(counts)) => counts,
-        (None, None) => HashMap::new(),
-    };
-
-    let files: Vec<FileEntry> = status_entries
-        .into_iter()
-        .map(|(path, kind)| {
-            let (additions, deletions) = counts.get(&path).copied().unwrap_or((0, 0));
-            FileEntry { path, kind, additions, deletions }
-        })
-        .collect();
-
-    Ok(CommitDiff {
-        parent_oid: parent_oid_opt.map(|o| o.to_string()),
-        files,
-    })
-}
-
+#[cfg(test)]
 fn push_patch_line(patch: &mut String, origin: char, content: &[u8]) {
     match origin {
         ' ' | '+' | '-' => patch.push(origin),
@@ -2167,509 +1454,4 @@ mod tests {
 
         assert_eq!(patch, "@@ -1,2 +1,2 @@\n same\n-old\n+new\n");
     }
-}
-
-#[tauri::command]
-pub fn get_commit_patch(
-    oid: String,
-    app: AppHandle,
-    state: State<AppState>,
-) -> Result<CommitPatch, String> {
-    let total_start = Instant::now();
-    let commit_oid = git2::Oid::from_str(&oid).map_err(|e| format!("invalid oid: {e}"))?;
-
-    let workdir_path: PathBuf;
-    let lock_ms: f64;
-    let parent_oid_opt: Option<git2::Oid>;
-    let mut files: Vec<FileEntry> = Vec::new();
-    let mut patch = String::new();
-
-    {
-        let lock_start = Instant::now();
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        lock_ms = ms_since(lock_start);
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
-    }
-
-    let repo_open_start = Instant::now();
-    let repo = Repository::open(&workdir_path)
-        .map_err(|e| format!("failed to open repository: {e}"))?;
-    let repo_open_ms = ms_since(repo_open_start);
-
-    let diff_start = Instant::now();
-    let commit = repo
-        .find_commit(commit_oid)
-        .map_err(|e| format!("failed to find commit: {e}"))?;
-    let commit_tree = commit
-        .tree()
-        .map_err(|e| format!("failed to get commit tree: {e}"))?;
-    let (parent_oid, parent_tree) = if commit.parent_count() == 0 {
-        (None, None)
-    } else {
-        let parent = commit
-            .parent(0)
-            .map_err(|e| format!("failed to get parent: {e}"))?;
-        let parent_tree = parent
-            .tree()
-            .map_err(|e| format!("failed to get parent tree: {e}"))?;
-        (Some(parent.id()), Some(parent_tree))
-    };
-    parent_oid_opt = parent_oid;
-
-    let mut opts = git2::DiffOptions::new();
-    opts.context_lines(5);
-    let diff = repo
-        .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut opts))
-        .map_err(|e| format!("failed to diff trees: {e}"))?;
-    let diff_ms = ms_since(diff_start);
-
-    let files_start = Instant::now();
-    files.reserve(diff.deltas().len());
-    for delta in diff.deltas() {
-        let path = delta
-            .new_file()
-            .path()
-            .or_else(|| delta.old_file().path())
-            .and_then(|p| p.to_str())
-            .map(str::to_owned);
-        let Some(path) = path else { continue };
-        let kind = match delta.status() {
-            git2::Delta::Added | git2::Delta::Copied | git2::Delta::Untracked => ChangeKind::Added,
-            git2::Delta::Deleted => ChangeKind::Deleted,
-            git2::Delta::Renamed => ChangeKind::Renamed,
-            git2::Delta::Typechange => ChangeKind::Typechange,
-            _ => ChangeKind::Modified,
-        };
-        files.push(FileEntry {
-            path,
-            kind,
-            additions: 0,
-            deletions: 0,
-        });
-    }
-    let files_ms = ms_since(files_start);
-
-    let patch_start = Instant::now();
-    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
-        push_patch_line(&mut patch, line.origin(), line.content());
-        true
-    })
-    .map_err(|e| format!("failed to format patch: {e}"))?;
-    let patch_ms = ms_since(patch_start);
-
-    perf_event(
-        &app,
-        "get_commit_patch",
-        json!({
-            "oid": oid.get(..7).unwrap_or(&oid),
-            "files": files.len(),
-            "patchBytes": patch.len(),
-            "lockWaitMs": lock_ms,
-            "repoOpenMs": repo_open_ms,
-            "diffMs": diff_ms,
-            "filesMs": files_ms,
-            "patchMs": patch_ms,
-            "totalMs": ms_since(total_start),
-        }),
-    );
-
-    Ok(CommitPatch {
-        parent_oid: parent_oid_opt.map(|o| o.to_string()),
-        files,
-        patch,
-    })
-}
-
-#[tauri::command]
-pub fn get_root_commit_file_contents_batch(
-    oid: String,
-    requests: Vec<String>,
-    state: State<AppState>,
-) -> Result<Vec<FileContentsBatchItem>, String> {
-    let commit_oid = git2::Oid::from_str(&oid).map_err(|e| format!("invalid oid: {e}"))?;
-    let requested_count = requests.len();
-    let workdir_path: PathBuf = {
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        repo.workdir().ok_or("bare repository")?.to_path_buf()
-    };
-
-    if requested_count == 0 {
-        return Ok(Vec::new());
-    }
-
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get().min(8))
-        .unwrap_or(4)
-        .min(requested_count);
-    let chunk_size = requested_count.div_ceil(num_threads.max(1));
-    let workdir: &Path = &workdir_path;
-
-    let responses: Vec<FileContentsBatchItem> = std::thread::scope(|s| {
-        let handles: Vec<_> = requests
-            .chunks(chunk_size)
-            .map(|chunk| {
-                s.spawn(move || -> Vec<FileContentsBatchItem> {
-                    let repo = match Repository::open(workdir) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            return chunk
-                                .iter()
-                                .map(|p| FileContentsBatchItem {
-                                    path: p.clone(),
-                                    response: None,
-                                    error: Some(format!("worker repo open failed: {e}")),
-                                })
-                                .collect();
-                        }
-                    };
-                    let commit_tree = repo
-                        .find_commit(commit_oid)
-                        .ok()
-                        .and_then(|c| c.tree().ok());
-
-                    let mut out = Vec::with_capacity(chunk.len());
-                    for path in chunk {
-                        let relative_path = Path::new(path);
-                        let result = (|| -> Result<FileContentsResponse, String> {
-                            validate_repo_relative_path(relative_path)?;
-                            let new_side =
-                                read_tree_file(&repo, commit_tree.as_ref(), relative_path)?;
-                            Ok(FileContentsResponse {
-                                name: path.clone(),
-                                old_content: None,
-                                old_binary: false,
-                                new_content: new_side.content,
-                                new_binary: new_side.is_binary,
-                            })
-                        })();
-                        out.push(match result {
-                            Ok(response) => FileContentsBatchItem {
-                                path: path.clone(),
-                                response: Some(response),
-                                error: None,
-                            },
-                            Err(error) => FileContentsBatchItem {
-                                path: path.clone(),
-                                response: None,
-                                error: Some(error),
-                            },
-                        });
-                    }
-                    out
-                })
-            })
-            .collect();
-
-        let mut all = Vec::with_capacity(requested_count);
-        for handle in handles {
-            if let Ok(chunk) = handle.join() {
-                all.extend(chunk);
-            }
-        }
-        all
-    });
-
-    Ok(responses)
-}
-
-fn count_reachable_commits(repo: &Repository, start_oid: git2::Oid) -> Result<u64, String> {
-    let mut walk = repo
-        .revwalk()
-        .map_err(|e| format!("failed to create count revwalk: {e}"))?;
-    walk.push(start_oid)
-        .map_err(|e| format!("failed to push count start oid: {e}"))?;
-    let mut total = 0u64;
-    for oid in walk {
-        oid.map_err(|e| format!("count revwalk error: {e}"))?;
-        total += 1;
-    }
-    Ok(total)
-}
-
-#[tauri::command]
-pub fn list_commits_stream(
-    branch: Option<String>,
-    request_id: String,
-    app: AppHandle,
-    state: State<AppState>,
-) -> Result<ListCommitsStreamAck, String> {
-    let workdir_path: PathBuf;
-    let start_oid: git2::Oid;
-    let ref_map: HashMap<String, Vec<String>>;
-
-    {
-        let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
-        let repo = lock.as_ref().ok_or("no repository open")?;
-        workdir_path = repo.workdir().ok_or("bare repository")?.to_path_buf();
-
-        // Resolve the start oid: explicit branch wins; otherwise HEAD. If
-        // either fails we emit an error event (or `done` for unborn HEAD).
-        let (resolved_start, missing) = if let Some(name) = branch.as_deref() {
-            match repo.find_branch(name, BranchType::Local) {
-                Ok(b) => match b.get().peel_to_commit() {
-                    Ok(c) => (Some(c.id()), false),
-                    Err(_) => (None, false),
-                },
-                Err(_) => (None, false),
-            }
-        } else {
-            match repo.head() {
-                Ok(h) => match h.peel_to_commit() {
-                    Ok(c) => (Some(c.id()), false),
-                    Err(_) => (None, true),
-                },
-                Err(_) => (None, true),
-            }
-        };
-
-        match resolved_start {
-            Some(oid) => {
-                start_oid = oid;
-            }
-            None if missing => {
-                // Unborn HEAD — emit `done` immediately with no chunks.
-                let _ = app.emit(
-                    "commit-history:done",
-                    json!({ "request_id": request_id, "total_estimate": 0u64 }),
-                );
-                return Ok(ListCommitsStreamAck {
-                    request_id,
-                    total_estimate: Some(0),
-                });
-            }
-            None => {
-                let message = match branch.as_deref() {
-                    Some(_) => "branch not found".to_string(),
-                    None => "no HEAD".to_string(),
-                };
-                let _ = app.emit(
-                    "commit-history:error",
-                    json!({ "request_id": request_id, "message": message }),
-                );
-                return Err(message);
-            }
-        }
-
-        // Build oid -> Vec<refname> map. Skip refs we cannot peel.
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        if let Ok(refs) = repo.references() {
-            for r in refs.flatten() {
-                let Ok(commit) = r.peel_to_commit() else {
-                    continue;
-                };
-                let Some(short) = r.shorthand() else { continue };
-                map.entry(commit.id().to_string())
-                    .or_default()
-                    .push(short.to_owned());
-            }
-        }
-        ref_map = map;
-    }
-    let count_start = Instant::now();
-    let count_repo = Repository::open(&workdir_path)
-        .map_err(|e| format!("failed to open repository for commit count: {e}"))?;
-    let total_estimate = count_reachable_commits(&count_repo, start_oid)?;
-    perf_event(
-        &app,
-        "list_commits_stream:count",
-        json!({
-            "requestId": &request_id,
-            "total": total_estimate,
-            "countMs": ms_since(count_start),
-        }),
-    );
-
-    // Bump generation and clear cancel so this walker is not preempted.
-    let my_gen = state.walker_generation.fetch_add(1, Ordering::SeqCst) + 1;
-    state.walker_cancel.store(false, Ordering::SeqCst);
-
-    let walker_generation = state.walker_generation.clone();
-    let walker_cancel = state.walker_cancel.clone();
-    let app_thread = app.clone();
-    let request_id_thread = request_id.clone();
-    let total_estimate_thread = total_estimate;
-    let workdir_thread = workdir_path.clone();
-
-    std::thread::spawn(move || {
-        let repo = match Repository::open(&workdir_thread) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = app_thread.emit(
-                    "commit-history:error",
-                    json!({
-                        "request_id": request_id_thread,
-                        "message": format!("failed to open repository: {e}"),
-                    }),
-                );
-                return;
-            }
-        };
-
-        let mut walk = match repo.revwalk() {
-            Ok(w) => w,
-            Err(e) => {
-                let _ = app_thread.emit(
-                    "commit-history:error",
-                    json!({
-                        "request_id": request_id_thread,
-                        "message": format!("failed to create revwalk: {e}"),
-                    }),
-                );
-                return;
-            }
-        };
-        if let Err(e) = walk.set_sorting(git2::Sort::TIME) {
-            let _ = app_thread.emit(
-                "commit-history:error",
-                json!({
-                    "request_id": request_id_thread,
-                    "message": format!("failed to set sorting: {e}"),
-                }),
-            );
-            return;
-        }
-        if let Err(e) = walk.push(start_oid) {
-            let _ = app_thread.emit(
-                "commit-history:error",
-                json!({
-                    "request_id": request_id_thread,
-                    "message": format!("failed to push start oid: {e}"),
-                }),
-            );
-            return;
-        }
-
-        let cancelled = |gen_ref: &Arc<AtomicU64>, cancel_ref: &Arc<AtomicBool>| -> bool {
-            cancel_ref.load(Ordering::SeqCst) || gen_ref.load(Ordering::SeqCst) != my_gen
-        };
-
-        let mut buffer: Vec<CommitGraphRow> = Vec::with_capacity(GRAPH_CHUNK_SIZE);
-        let stream_start = Instant::now();
-        let mut chunk_start = Instant::now();
-        let mut emitted = 0usize;
-
-        for oid_result in walk {
-            let oid = match oid_result {
-                Ok(o) => o,
-                Err(e) => {
-                    let _ = app_thread.emit(
-                        "commit-history:error",
-                        json!({
-                            "request_id": request_id_thread,
-                            "message": format!("revwalk error: {e}"),
-                        }),
-                    );
-                    return;
-                }
-            };
-            let commit = match repo.find_commit(oid) {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = app_thread.emit(
-                        "commit-history:error",
-                        json!({
-                            "request_id": request_id_thread,
-                            "message": format!("failed to find commit {oid}: {e}"),
-                        }),
-                    );
-                    return;
-                }
-            };
-            let details = commit_details_from_commit(oid, &commit, false);
-            let parents: Vec<String> =
-                commit.parent_ids().map(|p| p.to_string()).collect();
-            let refs = ref_map.get(&details.oid).cloned().unwrap_or_default();
-            buffer.push(CommitGraphRow {
-                oid: details.oid,
-                parents,
-                refs,
-                subject: details.subject,
-                author_name: details.author_name,
-                author_email: details.author_email,
-                author_timestamp: details.author_timestamp,
-                committer_name: details.committer_name,
-                committer_email: details.committer_email,
-                committer_timestamp: details.committer_timestamp,
-            });
-
-            if buffer.len() >= GRAPH_CHUNK_SIZE {
-                let chunk = std::mem::replace(
-                    &mut buffer,
-                    Vec::with_capacity(GRAPH_CHUNK_SIZE),
-                );
-                let chunk_len = chunk.len();
-                emitted += chunk_len;
-                perf_event(
-                    &app_thread,
-                    "list_commits_stream:chunk",
-                    json!({
-                        "requestId": &request_id_thread,
-                        "count": chunk_len,
-                        "loaded": emitted,
-                        "chunkMs": ms_since(chunk_start),
-                        "totalMs": ms_since(stream_start),
-                    }),
-                );
-                chunk_start = Instant::now();
-                let _ = app_thread.emit(
-                    "commit-history:chunk",
-                    json!({
-                        "request_id": request_id_thread,
-                        "oids": chunk,
-                        "total_estimate": total_estimate_thread,
-                    }),
-                );
-                if cancelled(&walker_generation, &walker_cancel) {
-                    return;
-                }
-            }
-        }
-
-        if !buffer.is_empty() {
-            let chunk_len = buffer.len();
-            emitted += chunk_len;
-            perf_event(
-                &app_thread,
-                "list_commits_stream:chunk",
-                json!({
-                    "requestId": &request_id_thread,
-                    "count": chunk_len,
-                    "loaded": emitted,
-                    "chunkMs": ms_since(chunk_start),
-                    "totalMs": ms_since(stream_start),
-                }),
-            );
-            let _ = app_thread.emit(
-                "commit-history:chunk",
-                json!({
-                    "request_id": request_id_thread,
-                    "oids": buffer,
-                    "total_estimate": total_estimate_thread,
-                }),
-            );
-        }
-        perf_event(
-            &app_thread,
-            "list_commits_stream:done",
-            json!({
-                "requestId": &request_id_thread,
-                "loaded": emitted,
-                "totalMs": ms_since(stream_start),
-            }),
-        );
-        let _ = app_thread.emit(
-            "commit-history:done",
-            json!({
-                "request_id": request_id_thread,
-                "total_estimate": total_estimate_thread,
-            }),
-        );
-    });
-
-    Ok(ListCommitsStreamAck {
-        request_id,
-        total_estimate: Some(total_estimate),
-    })
 }
