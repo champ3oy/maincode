@@ -17,8 +17,14 @@ interface FileTreeProps {
   refreshNonce?: number;
 }
 
-const toModelPath = (e: DirEntryInfo): string =>
-  e.is_dir ? e.path + "/" : e.path;
+// `@pierre/trees` builds its tree from the path segments it is given, so the
+// paths must be RELATIVE to the workspace root — otherwise an absolute path
+// like `/Users/me/proj/src` roots the tree at the filesystem `/` and the whole
+// disk becomes browsable. We feed relative model paths (dirs carry a trailing
+// slash) and convert back to absolute when calling the backend / opening files.
+function normalizeRoot(rootPath: string): string {
+  return rootPath.replace(/\/+$/, "");
+}
 
 const treeStyle: CSSProperties = {
   colorScheme: "dark",
@@ -40,11 +46,28 @@ export function FileTree({
   onFileOp,
   refreshNonce = 0,
 }: FileTreeProps) {
+  // Kept current every render so the stable helpers below always see the
+  // latest root without re-triggering effects.
+  const rootRef = useRef(normalizeRoot(rootPath));
+  rootRef.current = normalizeRoot(rootPath);
+
+  // absolute fs path -> relative model path (trailing slash for directories)
+  const toModelPath = useCallback((e: DirEntryInfo): string => {
+    const rel = e.path.slice(rootRef.current.length + 1);
+    return e.is_dir ? rel + "/" : rel;
+  }, []);
+  // relative model path -> absolute fs path (drops any trailing slash)
+  const toAbs = useCallback((modelPath: string): string => {
+    return `${rootRef.current}/${modelPath.replace(/\/$/, "")}`;
+  }, []);
+
   const [paths, setPaths] = useState<string[]>([]);
-  // Set of fs paths (without trailing slash) that have been loaded
+  // Absolute fs paths that have been loaded (initial root + expanded dirs).
   const loadedDirs = useRef<Set<string>>(new Set());
-  // Set of model-paths (with trailing slash) that are currently expanded
+  // Relative model-paths (with trailing slash) currently expanded.
   const expandedModelPaths = useRef<Set<string>>(new Set());
+  // Last selection path we acted on (dedup guard for the selection effect).
+  const lastHandledRef = useRef<string | null>(null);
 
   const { model } = useFileTree({
     id: "files-browser",
@@ -68,14 +91,16 @@ export function FileTree({
   // Load root directory on mount / rootPath change
   useEffect(() => {
     let cancelled = false;
+    const absRoot = normalizeRoot(rootPath);
     loadedDirs.current = new Set();
     expandedModelPaths.current = new Set();
+    lastHandledRef.current = null;
     setPaths([]);
 
-    readDir(rootPath)
+    readDir(absRoot)
       .then((entries) => {
         if (cancelled) return;
-        loadedDirs.current.add(rootPath);
+        loadedDirs.current.add(absRoot);
         setPaths(entries.map(toModelPath));
       })
       .catch(() => {
@@ -85,9 +110,9 @@ export function FileTree({
     return () => {
       cancelled = true;
     };
-  }, [rootPath]);
+  }, [rootPath, toModelPath]);
 
-  // Refresh: re-read all loaded dirs, rebuild paths set
+  // Refresh: re-read all loaded dirs, rebuild the (relative) paths set
   const refreshLoaded = useCallback(() => {
     const currentLoaded = [...loadedDirs.current];
     Promise.all(
@@ -95,8 +120,6 @@ export function FileTree({
         readDir(dir).then((entries) => ({ dir, entries })).catch(() => null),
       ),
     ).then((results) => {
-      // Build a new paths set: union of all loaded dir entries
-      // Each dir's entries are model-path form
       const modelPathSet = new Set<string>();
       for (const result of results) {
         if (!result) continue;
@@ -104,16 +127,15 @@ export function FileTree({
           modelPathSet.add(toModelPath(e));
         }
       }
-      const newPaths = [...modelPathSet];
       // Keep expandedModelPaths in sync (only keep dirs that still exist)
       const stillExpanded = new Set<string>();
       for (const mp of expandedModelPaths.current) {
         if (modelPathSet.has(mp)) stillExpanded.add(mp);
       }
       expandedModelPaths.current = stillExpanded;
-      setPaths(newPaths);
+      setPaths([...modelPathSet]);
     });
-  }, []);
+  }, [toModelPath]);
 
   // refreshNonce prop: bump to force reload
   const prevNonce = useRef(0);
@@ -140,11 +162,10 @@ export function FileTree({
 
   // Selection → lazy-load directories / open files
   const selectedPaths = useFileTreeSelection(model);
-  const lastHandledRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (selectedPaths.length === 0) return;
-    const path = selectedPaths[selectedPaths.length - 1];
+    const path = selectedPaths[selectedPaths.length - 1]; // relative model path
     if (path === lastHandledRef.current) return;
     lastHandledRef.current = path;
 
@@ -152,13 +173,13 @@ export function FileTree({
     if (!item) return;
 
     if (!item.isDirectory()) {
-      // It's a file — open it
-      onOpenFile(path);
+      // It's a file — open it (absolute path for the backend)
+      onOpenFile(toAbs(path));
       return;
     }
 
-    // It's a directory. Strip trailing slash for the fs path.
-    const fsPath = path.replace(/\/$/, "");
+    // It's a directory — absolute fs path for readDir.
+    const fsPath = toAbs(path);
 
     if (loadedDirs.current.has(fsPath)) {
       // Already loaded — track expansion (so resetPaths keeps it open)
@@ -181,7 +202,25 @@ export function FileTree({
         loadedDirs.current.delete(fsPath);
         expandedModelPaths.current.delete(path);
       });
-  }, [selectedPaths, model, onOpenFile]);
+  }, [selectedPaths, model, onOpenFile, toAbs, toModelPath]);
+
+  // The context menu reports relative model paths; the App's file-op handlers
+  // work in absolute paths, so convert before forwarding.
+  const handleFileOp = useCallback(
+    (op: FileOp) => {
+      switch (op.kind) {
+        case "new-file":
+        case "new-folder":
+          onFileOp({ ...op, dir: toAbs(op.dir) });
+          break;
+        case "rename":
+        case "delete":
+          onFileOp({ ...op, path: toAbs(op.path) });
+          break;
+      }
+    },
+    [onFileOp, toAbs],
+  );
 
   return (
     <div style={{ height: "100%" }}>
@@ -192,7 +231,7 @@ export function FileTree({
           <FileTreeContextMenu
             item={item}
             context={context}
-            onFileOp={onFileOp}
+            onFileOp={handleFileOp}
           />
         )}
       />
