@@ -1,0 +1,26 @@
+#!/bin/sh
+# main — open the Maincode editor at a directory (default: the current directory)
+#
+# Usage:
+#   main            # open the current directory
+#   main .          # open the current directory
+#   main path/to/dir
+#
+# Install: copy this to a directory on your PATH, e.g.
+#   cp scripts/main ~/bin/main && chmod +x ~/bin/main
+# and make sure Maincode.app is in /Applications (or ~/Applications).
+
+dir="${1:-.}"
+if [ ! -d "$dir" ]; then
+  echo "main: not a directory: $dir" >&2
+  exit 1
+fi
+abs="$(cd "$dir" && pwd)"
+
+# -n launches a fresh instance pointed at the folder; --args forwards the path
+# to the app (read as the launch path in src-tauri/src/main.rs).
+if ! open -na "Maincode" --args "$abs" 2>/dev/null; then
+  echo "main: could not launch Maincode.app." >&2
+  echo "      Build it with 'bun run tauri build' and move Maincode.app to /Applications." >&2
+  exit 1
+fi
