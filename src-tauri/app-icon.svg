@@ -4,13 +4,26 @@
       <stop stop-color="#1e1e20"/>
       <stop offset="1" stop-color="#060607"/>
     </linearGradient>
-    <linearGradient id="mark" x1="300" y1="300" x2="724" y2="724" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#ff678d"/>
-      <stop offset="0.5" stop-color="#9d6afb"/>
-      <stop offset="1" stop-color="#009fff"/>
+    <linearGradient id="top" x1="512" y1="232" x2="512" y2="492" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dcdcdc"/>
+    </linearGradient>
+    <linearGradient id="left" x1="262" y1="362" x2="512" y2="742" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#bcbcbc"/>
+      <stop offset="1" stop-color="#7c7c7e"/>
+    </linearGradient>
+    <linearGradient id="right" x1="762" y1="362" x2="512" y2="742" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6d6d70"/>
+      <stop offset="1" stop-color="#3f3f42"/>
     </linearGradient>
   </defs>
   <rect width="1024" height="1024" rx="228" fill="url(#tile)"/>
   <rect x="3" y="3" width="1018" height="1018" rx="225" stroke="#ffffff" stroke-opacity="0.07" stroke-width="6"/>
-  <path d="M312 704 L312 320 L512 556 L712 320 L712 704" stroke="url(#mark)" stroke-width="80" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- isometric cube: top (light), left (mid), right (dark) -->
+  <path d="M512 232 L762 362 L512 492 L262 362 Z" fill="url(#top)"/>
+  <path d="M262 362 L512 492 L512 742 L262 612 Z" fill="url(#left)"/>
+  <path d="M762 362 L512 492 L512 742 L762 612 Z" fill="url(#right)"/>
+  <!-- subtle top-edge sheen -->
+  <path d="M512 232 L762 362" stroke="#ffffff" stroke-opacity="0.5" stroke-width="4"/>
+  <path d="M512 232 L262 362" stroke="#ffffff" stroke-opacity="0.5" stroke-width="4"/>
 </svg>
