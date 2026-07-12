@@ -1,6 +1,7 @@
 mod git;
 mod watcher;
 mod fs_ops;
+mod pty;
 
 use git::AppState;
 use std::path::PathBuf;
@@ -31,6 +32,7 @@ pub fn run() {
             watcher: Mutex::new(None),
             watcher_generation: AtomicU64::new(0),
         })
+        .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
             git::get_repo_status,
@@ -52,6 +54,10 @@ pub fn run() {
             fs_ops::create_dir,
             fs_ops::rename_path,
             fs_ops::delete_path,
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
