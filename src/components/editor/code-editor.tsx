@@ -2,23 +2,23 @@ import { useEffect, useRef } from "react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { basicSetup } from "codemirror";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
+import { pierreDark } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 
-// oneDark ships its own (lighter) background; override it so the editor blends
-// with the app's background (matching the sidebar and the diff view) instead of
-// looking like a separate theme. Added AFTER oneDark so these rules win.
-const appBackground = EditorView.theme({
+// In light mode, keep CodeMirror's default highlighting but make the surface
+// transparent so it blends with the app background.
+const lightBackground = EditorView.theme({
   "&": { backgroundColor: "transparent" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none" },
   ".cm-activeLineGutter": { backgroundColor: "transparent" },
 });
 
 function themeExtensions(dark: boolean) {
-  return dark ? [oneDark, appBackground] : [appBackground];
+  // Dark mode uses the pierre-dark palette so the editor matches the diff view.
+  return dark ? pierreDark() : [lightBackground];
 }
 
 interface CodeEditorProps {
