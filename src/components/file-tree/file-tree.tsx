@@ -75,7 +75,7 @@ export function FileTree({
     initialExpansion: "closed",
     flattenEmptyDirectories: false,
     density: "compact",
-    icons: { set: "standard", colored: true },
+    icons: { set: "complete", colored: true },
     composition: {
       contextMenu: { enabled: true, triggerMode: "right-click" },
     },
