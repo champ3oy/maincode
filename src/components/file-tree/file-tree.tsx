@@ -231,6 +231,7 @@ export function FileTree({
           <FileTreeContextMenu
             item={item}
             context={context}
+            rootPath={rootPath}
             onFileOp={handleFileOp}
           />
         )}

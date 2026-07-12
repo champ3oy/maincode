@@ -112,6 +112,22 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Suppress the native webview context menu (the dev "Reload / Inspect
+  // Element" menu) everywhere except text fields and the code editor, where
+  // the native copy/paste menu is still useful. The file tree renders its own
+  // menu via @pierre/trees.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("input, textarea, [contenteditable='true'], .cm-editor")) {
+        return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => window.removeEventListener("contextmenu", onContextMenu);
+  }, []);
+
   // Load workspace files when palette opens; clear stale list on close.
   useEffect(() => {
     if (!paletteOpen) {
