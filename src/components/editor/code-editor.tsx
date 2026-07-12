@@ -5,7 +5,7 @@ import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
-import { pierreDark } from "@/lib/cm-theme";
+import { pierreDark, searchPanelTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -59,6 +59,7 @@ export function CodeEditor({
       doc,
       extensions: [
         basicSetup,
+        searchPanelTheme,
         keymap.of([
           {
             key: "Mod-s",
