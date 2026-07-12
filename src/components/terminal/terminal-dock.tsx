@@ -53,7 +53,7 @@ export function TerminalDock({
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex h-7 shrink-0 items-center justify-between border-b border-border px-2">
+      <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-2">
         <span className="text-muted-foreground text-xs font-medium">
           Terminal
         </span>

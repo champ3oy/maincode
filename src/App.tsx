@@ -421,7 +421,7 @@ function App() {
             <div className="flex h-full flex-col bg-sidebar">
               {/* Files tab header (New File / New Folder buttons) */}
               {sidebarTab === "files" && (
-                <div className="flex h-10 items-center border-b border-border px-3">
+                <div className="flex h-9 items-center border-b border-border px-3">
                   <span className="min-w-0 flex-1 truncate text-xs font-semibold">
                     {rootName}
                   </span>
