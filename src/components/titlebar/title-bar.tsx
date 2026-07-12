@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { IconFiles, IconGitBranch } from "@tabler/icons-react";
+import { IconFiles, IconGitBranch, IconTerminal2 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 
 export type SidebarTab = "files" | "changes";
@@ -9,6 +9,8 @@ interface TitleBarProps {
   gitAvailable: boolean;
   changeCount: number;
   onSelectTab: (tab: SidebarTab) => void;
+  showTerminal: boolean;
+  onToggleTerminal: () => void;
 }
 
 // A custom overlay title bar. The window uses `titleBarStyle: "Overlay"` so the
@@ -19,6 +21,8 @@ export function TitleBar({
   gitAvailable,
   changeCount,
   onSelectTab,
+  showTerminal,
+  onToggleTerminal,
 }: TitleBarProps) {
   return (
     <div
@@ -41,6 +45,14 @@ export function TitleBar({
           onClick={() => onSelectTab("changes")}
         >
           <IconGitBranch className="size-4" stroke={1.75} />
+        </TabButton>
+        <span className="mx-1 h-4 w-px bg-border" />
+        <TabButton
+          label="Toggle Terminal"
+          active={showTerminal}
+          onClick={onToggleTerminal}
+        >
+          <IconTerminal2 className="size-4" stroke={1.75} />
         </TabButton>
       </div>
     </div>

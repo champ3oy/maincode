@@ -45,7 +45,7 @@ import {
   listFilesRecursive,
 } from "@/lib/fs";
 import { CommandPalette, type PaletteCommand } from "@/components/command-palette/command-palette";
-import { TerminalPanel } from "@/components/terminal/terminal-panel";
+import { TerminalDock } from "@/components/terminal/terminal-dock";
 
 
 function App() {
@@ -407,6 +407,8 @@ function App() {
           gitAvailable={gitAvailable}
           changeCount={(status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)}
           onSelectTab={setSidebarTab}
+          showTerminal={showTerminal}
+          onToggleTerminal={() => setShowTerminal((v) => !v)}
         />
         <ResizablePanelGroup
           orientation="horizontal"
@@ -496,7 +498,10 @@ function App() {
                 <>
                   <ResizableHandle />
                   <ResizablePanel defaultSize="30%" minSize={80}>
-                    <TerminalPanel cwd={rootPath} />
+                    <TerminalDock
+                      cwd={rootPath}
+                      onEmpty={() => setShowTerminal(false)}
+                    />
                   </ResizablePanel>
                 </>
               )}
