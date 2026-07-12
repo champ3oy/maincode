@@ -18,6 +18,7 @@ function App() {
   const { workdir, status, refresh, open, close } = useRepoStatus();
   const { addRecent } = useRecentRepos();
   const [gitAvailable, setGitAvailable] = useState(false);
+  const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
   const restoreStartedRef = useRef(false);
 
@@ -58,22 +59,29 @@ function App() {
     if (!rootPath) {
       gitCloseRef.current();
       setGitAvailable(false);
+      setGitPending(false);
       return;
     }
     let cancelled = false;
+    setGitPending(true);
     gitOpenRef
       .current(rootPath)
       .then(() => {
-        if (!cancelled) setGitAvailable(true);
+        if (!cancelled) {
+          setGitAvailable(true);
+          setGitPending(false);
+        }
       })
       .catch(() => {
         if (!cancelled) {
           gitCloseRef.current();
           setGitAvailable(false);
+          setGitPending(false);
         }
       });
     return () => {
       cancelled = true;
+      gitCloseRef.current();
     };
   }, [rootPath]);
 
@@ -170,6 +178,8 @@ function App() {
             }}
             onBranchSwitched={handleBranchSwitched}
           />
+        ) : gitPending ? (
+          <div className="h-7 border-t border-border" />
         ) : (
           <footer className="flex h-7 items-center border-t border-border px-3">
             <span className="text-muted-foreground text-xs">
