@@ -8,6 +8,19 @@ import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { languageKeyForPath } from "@/lib/language";
 
+// oneDark ships its own (lighter) background; override it so the editor blends
+// with the app's background (matching the sidebar and the diff view) instead of
+// looking like a separate theme. Added AFTER oneDark so these rules win.
+const appBackground = EditorView.theme({
+  "&": { backgroundColor: "transparent" },
+  ".cm-gutters": { backgroundColor: "transparent", border: "none" },
+  ".cm-activeLineGutter": { backgroundColor: "transparent" },
+});
+
+function themeExtensions(dark: boolean) {
+  return dark ? [oneDark, appBackground] : [appBackground];
+}
+
 interface CodeEditorProps {
   path: string;
   /** Document text used when this path has no cached editor state yet. */
@@ -59,7 +72,7 @@ export function CodeEditor({
         langCompartment.current.of(
           cmLanguageFor(languageKeyForPath(docPath)),
         ),
-        themeCompartment.current.of(darkRef.current ? oneDark : []),
+        themeCompartment.current.of(themeExtensions(darkRef.current)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(
@@ -113,10 +126,12 @@ export function CodeEditor({
     if (!view) return;
     view.dispatch({
       effects: themeCompartment.current.reconfigure(
-        resolvedTheme === "dark" ? oneDark : [],
+        themeExtensions(resolvedTheme === "dark"),
       ),
     });
   }, [resolvedTheme, path]);
 
-  return <div ref={hostRef} className="h-full min-h-0 overflow-hidden" />;
+  return (
+    <div ref={hostRef} className="h-full min-h-0 overflow-hidden bg-background" />
+  );
 }
