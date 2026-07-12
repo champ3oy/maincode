@@ -2,6 +2,42 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
+const SKIP_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", ".next"];
+
+pub fn list_files_inner(root: &Path, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= max {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            if out.len() >= max {
+                break;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                if !SKIP_DIRS.contains(&name.as_str()) {
+                    stack.push(entry.path());
+                }
+            } else if ft.is_file() {
+                if let Ok(rel) = entry.path().strip_prefix(root) {
+                    out.push(rel.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+#[tauri::command]
+pub fn list_files_recursive(root: String, max: Option<usize>) -> Result<Vec<String>, String> {
+    Ok(list_files_inner(Path::new(&root), max.unwrap_or(5000)))
+}
+
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -228,5 +264,19 @@ mod tests {
         let r = read_file_inner(&p).unwrap();
         assert_eq!(r.content, None);
         assert_eq!(r.reason.as_deref(), Some("too_large"));
+    }
+
+    #[test]
+    fn list_files_recursive_skips_ignored_dirs_and_caps() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/deep")).unwrap();
+        fs::create_dir_all(tmp.path().join("node_modules/pkg")).unwrap();
+        fs::write(tmp.path().join("src/deep/a.rs"), "x").unwrap();
+        fs::write(tmp.path().join("top.txt"), "x").unwrap();
+        fs::write(tmp.path().join("node_modules/pkg/skip.js"), "x").unwrap();
+        let files = list_files_inner(tmp.path(), 100);
+        assert_eq!(files, vec!["src/deep/a.rs", "top.txt"]);
+        let capped = list_files_inner(tmp.path(), 1);
+        assert_eq!(capped.len(), 1);
     }
 }

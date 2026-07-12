@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ask } from "@tauri-apps/plugin-dialog";
+import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
+import { useTheme } from "next-themes";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -39,13 +40,16 @@ import {
   createDir,
   renamePath,
   deletePath,
+  listFilesRecursive,
 } from "@/lib/fs";
+import { CommandPalette, type PaletteCommand } from "@/components/command-palette/command-palette";
 
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
-  const { openFile, closeTab, handlePathRenamed } = useEditor();
+  const { openFile, closeTab, handlePathRenamed, activeTab, saveFile } = useEditor();
   const { addRecent } = useRecentRepos();
+  const { setTheme } = useTheme();
   const [gitAvailable, setGitAvailable] = useState(false);
   const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
@@ -77,6 +81,30 @@ function App() {
   // File tree refresh nonce: bump to trigger a tree reload
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
   const bumpTree = useCallback(() => setTreeRefreshNonce((n) => n + 1), []);
+
+  // Command palette state
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
+
+  // Cmd+K / Cmd+P → toggle command palette
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "p")) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Load workspace files when palette opens
+  useEffect(() => {
+    if (!paletteOpen || !rootPath) return;
+    listFilesRecursive(rootPath)
+      .then(setPaletteFiles)
+      .catch(() => setPaletteFiles([]));
+  }, [paletteOpen, rootPath]);
 
   // Pending file op waiting for name input
   const [pendingOp, setPendingOp] = useState<FileOp | null>(null);
@@ -148,6 +176,21 @@ function App() {
   );
   const openFolderRef = useRef(openFolderAndRecord);
   openFolderRef.current = openFolderAndRecord;
+
+  const handleOpenFolderDialog = useCallback(async () => {
+    const selected = await openDialog({ directory: true, multiple: false });
+    if (typeof selected === "string") openFolderAndRecord(selected);
+  }, [openFolderAndRecord]);
+
+  const paletteCommands = useMemo<PaletteCommand[]>(() => [
+    { id: "open-folder", label: "Open Folder…", run: () => void handleOpenFolderDialog() },
+    { id: "save", label: "Save Active File", run: () => { if (activeTab) void saveFile(activeTab.path); } },
+    { id: "tab-files", label: "Show Files", run: () => setSidebarTab("files") },
+    { id: "tab-changes", label: "Show Changes", run: () => setSidebarTab("changes") },
+    { id: "theme-light", label: "Theme: Light", run: () => setTheme("light") },
+    { id: "theme-dark", label: "Theme: Dark", run: () => setTheme("dark") },
+    { id: "theme-system", label: "Theme: System", run: () => setTheme("system") },
+  ], [activeTab, saveFile, setTheme, handleOpenFolderDialog]);
 
   // Restore: CLI launch path first, then last opened folder.
   useEffect(() => {
@@ -288,6 +331,13 @@ function App() {
     return (
       <>
         <Welcome onOpenFolder={openFolderAndRecord} />
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          files={paletteFiles}
+          onOpenFile={(rel) => void openFile(`${rootPath ?? ""}/${rel}`)}
+          commands={paletteCommands}
+        />
         <Toaster />
       </>
     );
@@ -416,6 +466,13 @@ function App() {
           </footer>
         )}
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        files={paletteFiles}
+        onOpenFile={(rel) => void openFile(`${rootPath}/${rel}`)}
+        commands={paletteCommands}
+      />
       <Toaster />
     </>
   );

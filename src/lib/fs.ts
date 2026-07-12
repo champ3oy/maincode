@@ -38,3 +38,7 @@ export function renamePath(from: string, to: string): Promise<void> {
 export function deletePath(path: string): Promise<void> {
   return invoke<void>("delete_path", { path });
 }
+
+export function listFilesRecursive(root: string, max?: number): Promise<string[]> {
+  return invoke<string[]>("list_files_recursive", { root, max });
+}
