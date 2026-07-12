@@ -1,16 +1,36 @@
 # Maincode
 
-A simple desktop code editor. Built on Tauri v2 + React + CodeMirror 6,
+A simple code editor without the bloatware.
+
+Built on Tauri v2 + React + CodeMirror 6,
 derived from [cub.dev](https://github.com/ephraimduncan/cub.dev).
 
 ## Features
 
 - Open any folder: file tree, tabs, syntax highlighting, find & replace (Cmd+F)
 - File operations from the tree (create / rename / delete)
-- Command palette (Cmd+K / Cmd+P): quick-open files, commands, theme
+- Integrated terminal (Ctrl+`)
 - Source control for git repos: stage, unstage, discard, diff view, commit,
   branch switching
-- Integrated terminal (Ctrl+`)
+
+## CLI
+
+Open a folder in the editor straight from your terminal with the `main`
+command. Install it once (pick any directory on your `PATH`):
+
+```bash
+cp scripts/main ~/bin/main && chmod +x ~/bin/main   # make sure ~/bin is on your PATH
+```
+
+Then:
+
+```bash
+main              # open the current directory
+main .            # open the current directory
+main path/to/dir  # open a specific folder
+```
+
+Requires `Maincode.app` in `/Applications` (or `~/Applications`).
 
 ## Development
 
