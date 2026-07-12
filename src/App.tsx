@@ -117,9 +117,17 @@ function App() {
       return;
     }
     if (!rootPath) return;
+    let stale = false;
     listFilesRecursive(rootPath)
-      .then(setPaletteFiles)
-      .catch(() => setPaletteFiles([]));
+      .then((files) => {
+        if (!stale) setPaletteFiles(files);
+      })
+      .catch(() => {
+        if (!stale) setPaletteFiles([]);
+      });
+    return () => {
+      stale = true;
+    };
   }, [paletteOpen, rootPath]);
 
   // Pending file op waiting for name input
