@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -15,9 +15,25 @@ import { Welcome } from "@/components/welcome/welcome";
 import { useRepoStatus } from "@/hooks/use-repo-status";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { readLastFolder, useWorkspace } from "@/hooks/use-workspace";
-import { getLaunchPath, getRepoBranch } from "@/lib/tauri";
+import {
+  getLaunchPath,
+  getRepoBranch,
+  stageFile,
+  unstageFile,
+  stageAll,
+  unstageAll,
+  commit,
+  discardFile,
+  type CommitOptions,
+  type FileEntry,
+} from "@/lib/tauri";
 import { useEditor } from "@/hooks/use-editor";
 import { EditorArea } from "@/components/editor/editor-area";
+import { DiffPanel } from "@/components/diff-panel/diff-panel";
+import { useDiffs } from "@/hooks/use-diffs";
+import { SidebarSwitch, type SidebarTab } from "@/components/sidebar/sidebar-switch";
+import { SourceControlPanel } from "@/components/source-control/source-control-panel";
+import { cn } from "@/lib/utils";
 import {
   createFile,
   createDir,
@@ -34,6 +50,29 @@ function App() {
   const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
   const restoreStartedRef = useRef(false);
+
+  // Source control panel state
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("files");
+  const [scrollToPath, setScrollToPath] = useState<string | null>(null);
+  const [scrollNonce, setScrollNonce] = useState(0);
+  const [diffStyle, setDiffStyle] = useState<"unified" | "split">("split");
+  const [allExpanded, setAllExpanded] = useState(true);
+  const [selectedChangedPath, setSelectedChangedPath] = useState<string | null>(null);
+
+  const { diffs, loading: diffsLoading } = useDiffs(status?.staged, status?.unstaged);
+
+  const allFiles = useMemo((): FileEntry[] => {
+    if (!status) return [];
+    const seen = new Set<string>();
+    const files: FileEntry[] = [];
+    for (const f of [...status.staged, ...status.unstaged]) {
+      if (!seen.has(f.path)) {
+        seen.add(f.path);
+        files.push(f);
+      }
+    }
+    return files;
+  }, [status]);
 
   // File tree refresh nonce: bump to trigger a tree reload
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
@@ -207,6 +246,44 @@ function App() {
     }
   }, [refresh, workdir]);
 
+  // Git staging/commit handlers
+  const handleStage = useCallback(async (path: string) => {
+    try { await stageFile(path); await refresh(); } catch (e) { toast.error(`Stage failed: ${e}`); }
+  }, [refresh]);
+
+  const handleUnstage = useCallback(async (path: string) => {
+    try { await unstageFile(path); await refresh(); } catch (e) { toast.error(`Unstage failed: ${e}`); }
+  }, [refresh]);
+
+  const handleStageAll = useCallback(async () => {
+    try { await stageAll(); await refresh(); } catch (e) { toast.error(`Stage all failed: ${e}`); }
+  }, [refresh]);
+
+  const handleUnstageAll = useCallback(async () => {
+    try { await unstageAll(); await refresh(); } catch (e) { toast.error(`Unstage all failed: ${e}`); }
+  }, [refresh]);
+
+  const handleCommit = useCallback(async (message: string, options?: CommitOptions) => {
+    try {
+      const oid = await commit(message, options);
+      toast.success(`${options?.amend ? "Amended" : "Committed"}: ${oid.slice(0, 7)}`);
+      await refresh();
+    } catch (e) { toast.error(`Commit failed: ${e}`); }
+  }, [refresh]);
+
+  const handleDiscardFile = useCallback(async (path: string) => {
+    const ok = await ask(`Discard changes to ${path}? This cannot be undone.`, { title: "Discard changes", kind: "warning" });
+    if (!ok) return;
+    try { await discardFile(path); await refresh(); toast.success(`Discarded ${path}`); }
+    catch (e) { toast.error(`Discard failed: ${e}`); }
+  }, [refresh]);
+
+  const handleSelectChangedFile = useCallback((path: string) => {
+    setSelectedChangedPath(path);
+    setScrollToPath(path);
+    setScrollNonce((n) => n + 1);
+  }, []);
+
   if (!rootPath) {
     return (
       <>
@@ -235,44 +312,88 @@ function App() {
         >
           <ResizablePanel defaultSize="22%" minSize={220} maxSize={400}>
             <div className="flex h-full flex-col bg-sidebar">
-              <div className="flex h-10 items-center border-b border-border px-3">
-                <span className="min-w-0 flex-1 truncate text-xs font-semibold">
-                  {rootName}
-                </span>
-                <button
-                  type="button"
-                  title="New File"
-                  className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
-                  onClick={() =>
-                    void handleFileOp({ kind: "new-file", dir: rootPath })
-                  }
-                >
-                  <span className="text-xs leading-none">+F</span>
-                </button>
-                <button
-                  type="button"
-                  title="New Folder"
-                  className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
-                  onClick={() =>
-                    void handleFileOp({ kind: "new-folder", dir: rootPath })
-                  }
-                >
-                  <span className="text-xs leading-none">+D</span>
-                </button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto p-2">
-                <FileTree
-                  rootPath={rootPath}
-                  onOpenFile={(path) => void openFile(path)}
-                  onFileOp={handleFileOp}
-                  refreshNonce={treeRefreshNonce}
-                />
-              </div>
+              {/* Tab switcher — always visible */}
+              <SidebarSwitch
+                active={sidebarTab}
+                changeCount={(status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)}
+                gitAvailable={gitAvailable}
+                onSelect={setSidebarTab}
+              />
+              {/* Files tab header (New File / New Folder buttons) */}
+              {sidebarTab === "files" && (
+                <div className="flex h-10 items-center border-b border-border px-3">
+                  <span className="min-w-0 flex-1 truncate text-xs font-semibold">
+                    {rootName}
+                  </span>
+                  <button
+                    type="button"
+                    title="New File"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
+                    onClick={() =>
+                      void handleFileOp({ kind: "new-file", dir: rootPath })
+                    }
+                  >
+                    <span className="text-xs leading-none">+F</span>
+                  </button>
+                  <button
+                    type="button"
+                    title="New Folder"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
+                    onClick={() =>
+                      void handleFileOp({ kind: "new-folder", dir: rootPath })
+                    }
+                  >
+                    <span className="text-xs leading-none">+D</span>
+                  </button>
+                </div>
+              )}
+              {/* Sidebar body: Files or Changes */}
+              {sidebarTab === "files" ? (
+                <div className="min-h-0 flex-1 overflow-auto p-2">
+                  <FileTree
+                    rootPath={rootPath}
+                    onOpenFile={(path) => void openFile(path)}
+                    onFileOp={handleFileOp}
+                    refreshNonce={treeRefreshNonce}
+                  />
+                </div>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <SourceControlPanel
+                    staged={status?.staged ?? []}
+                    unstaged={status?.unstaged ?? []}
+                    selectedPath={selectedChangedPath}
+                    onSelectFile={handleSelectChangedFile}
+                    onStage={(path) => void handleStage(path)}
+                    onUnstage={(path) => void handleUnstage(path)}
+                    onStageAll={() => void handleStageAll()}
+                    onUnstageAll={() => void handleUnstageAll()}
+                    onCommit={(msg, opts) => void handleCommit(msg, opts)}
+                    onDiscardFile={(path) => void handleDiscardFile(path)}
+                  />
+                </div>
+              )}
             </div>
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel defaultSize="78%">
-            <EditorArea />
+            {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
+            <div className={cn(sidebarTab === "changes" && "hidden", "h-full")}>
+              <EditorArea />
+            </div>
+            {sidebarTab === "changes" && (
+              <DiffPanel
+                files={allFiles}
+                diffs={diffs}
+                loading={diffsLoading}
+                diffStyle={diffStyle}
+                onDiffStyleChange={setDiffStyle}
+                allExpanded={allExpanded}
+                onToggleExpandAll={() => setAllExpanded((v) => !v)}
+                scrollToPath={scrollToPath}
+                scrollNonce={scrollNonce}
+              />
+            )}
           </ResizablePanel>
         </ResizablePanelGroup>
         {gitAvailable && workdir ? (
