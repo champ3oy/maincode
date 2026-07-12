@@ -1,11 +1,19 @@
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { FileTree as PierreFileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
 import { listen } from "@tauri-apps/api/event";
 import { readDir, type DirEntryInfo } from "@/lib/fs";
+import { FileTreeContextMenu } from "./file-tree-context-menu";
+
+export type FileOp =
+  | { kind: "new-file"; dir: string }
+  | { kind: "new-folder"; dir: string }
+  | { kind: "rename"; path: string; name: string; isDir: boolean }
+  | { kind: "delete"; path: string; name: string; isDir: boolean };
 
 interface FileTreeProps {
   rootPath: string;
   onOpenFile: (path: string) => void;
+  onFileOp: (op: FileOp) => void;
   refreshNonce?: number;
 }
 
@@ -29,6 +37,7 @@ const treeStyle: CSSProperties = {
 export function FileTree({
   rootPath,
   onOpenFile,
+  onFileOp,
   refreshNonce = 0,
 }: FileTreeProps) {
   const [paths, setPaths] = useState<string[]>([]);
@@ -44,6 +53,9 @@ export function FileTree({
     flattenEmptyDirectories: false,
     density: "compact",
     icons: { set: "standard", colored: true },
+    composition: {
+      contextMenu: { enabled: true, triggerMode: "right-click" },
+    },
   });
 
   // Sync model when paths change, preserving expansion state
@@ -76,7 +88,7 @@ export function FileTree({
   }, [rootPath]);
 
   // Refresh: re-read all loaded dirs, rebuild paths set
-  const refreshLoaded = () => {
+  const refreshLoaded = useCallback(() => {
     const currentLoaded = [...loadedDirs.current];
     Promise.all(
       currentLoaded.map((dir) =>
@@ -101,7 +113,7 @@ export function FileTree({
       expandedModelPaths.current = stillExpanded;
       setPaths(newPaths);
     });
-  };
+  }, []);
 
   // refreshNonce prop: bump to force reload
   const prevNonce = useRef(0);
@@ -110,7 +122,7 @@ export function FileTree({
       prevNonce.current = refreshNonce;
       refreshLoaded();
     }
-  });
+  }, [refreshNonce, refreshLoaded]);
 
   // Tauri repo:changed event → refresh
   useEffect(() => {
@@ -124,8 +136,7 @@ export function FileTree({
       cancelled = true;
       unlisten?.();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [refreshLoaded]);
 
   // Selection → lazy-load directories / open files
   const selectedPaths = useFileTreeSelection(model);
@@ -174,7 +185,17 @@ export function FileTree({
 
   return (
     <div style={{ height: "100%" }}>
-      <PierreFileTree model={model} style={treeStyle} />
+      <PierreFileTree
+        model={model}
+        style={treeStyle}
+        renderContextMenu={(item, context) => (
+          <FileTreeContextMenu
+            item={item}
+            context={context}
+            onFileOp={onFileOp}
+          />
+        )}
+      />
     </div>
   );
 }
