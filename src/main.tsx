@@ -14,6 +14,7 @@ import "./App.css";
 import { perfLog } from "@/lib/perf";
 import { DiffSettingsProvider } from "@/hooks/use-diff-settings";
 import { RecentReposProvider } from "@/hooks/use-recent-repos";
+import { WorkspaceProvider } from "@/hooks/use-workspace";
 
 // next-themes ships d.ts that loses `children` under React 19's namespace
 // resolution; re-type the provider so JSX accepts children.
@@ -94,7 +95,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <ThemeProvider attribute="class" defaultTheme="system">
         <DiffSettingsProvider>
           <RecentReposProvider>
-            <App />
+            <WorkspaceProvider>
+              <App />
+            </WorkspaceProvider>
           </RecentReposProvider>
         </DiffSettingsProvider>
       </ThemeProvider>
