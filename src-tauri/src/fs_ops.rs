@@ -57,6 +57,43 @@ pub fn read_file_inner(path: &Path) -> Result<ReadFileResult, String> {
     }
 }
 
+pub fn write_file_inner(path: &Path, contents: &str) -> Result<(), String> {
+    fs::write(path, contents).map_err(|e| e.to_string())
+}
+
+pub fn create_file_inner(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        return Err(format!("{} already exists", path.display()));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, "").map_err(|e| e.to_string())
+}
+
+pub fn create_dir_inner(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        return Err(format!("{} already exists", path.display()));
+    }
+    fs::create_dir_all(path).map_err(|e| e.to_string())
+}
+
+pub fn rename_path_inner(from: &Path, to: &Path) -> Result<(), String> {
+    if to.exists() {
+        return Err(format!("{} already exists", to.display()));
+    }
+    fs::rename(from, to).map_err(|e| e.to_string())
+}
+
+pub fn delete_path_inner(path: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| e.to_string())
+    } else {
+        fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
+
 #[tauri::command]
 pub fn read_dir(path: String) -> Result<Vec<DirEntryInfo>, String> {
     read_dir_inner(Path::new(&path))
@@ -67,10 +104,88 @@ pub fn read_file(path: String) -> Result<ReadFileResult, String> {
     read_file_inner(Path::new(&path))
 }
 
+#[tauri::command]
+pub fn write_file(path: String, contents: String) -> Result<(), String> {
+    write_file_inner(Path::new(&path), &contents)
+}
+
+#[tauri::command]
+pub fn create_file(path: String) -> Result<(), String> {
+    create_file_inner(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn create_dir(path: String) -> Result<(), String> {
+    create_dir_inner(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn rename_path(from: String, to: String) -> Result<(), String> {
+    rename_path_inner(Path::new(&from), Path::new(&to))
+}
+
+#[tauri::command]
+pub fn delete_path(path: String) -> Result<(), String> {
+    delete_path_inner(Path::new(&path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn write_then_read_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("f.txt");
+        write_file_inner(&p, "abc").unwrap();
+        assert_eq!(read_file_inner(&p).unwrap().content.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn create_file_fails_if_exists_and_makes_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("nested/dir/new.txt");
+        create_file_inner(&p).unwrap();
+        assert!(p.exists());
+        assert!(create_file_inner(&p).is_err());
+    }
+
+    #[test]
+    fn create_dir_fails_if_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("d");
+        create_dir_inner(&p).unwrap();
+        assert!(p.is_dir());
+        assert!(create_dir_inner(&p).is_err());
+    }
+
+    #[test]
+    fn rename_refuses_to_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.txt");
+        let b = tmp.path().join("b.txt");
+        fs::write(&a, "a").unwrap();
+        fs::write(&b, "b").unwrap();
+        assert!(rename_path_inner(&a, &b).is_err());
+        let c = tmp.path().join("c.txt");
+        rename_path_inner(&a, &c).unwrap();
+        assert!(c.exists() && !a.exists());
+    }
+
+    #[test]
+    fn delete_removes_files_and_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("f.txt");
+        fs::write(&f, "x").unwrap();
+        delete_path_inner(&f).unwrap();
+        assert!(!f.exists());
+        let d = tmp.path().join("d");
+        fs::create_dir(&d).unwrap();
+        fs::write(d.join("inner.txt"), "y").unwrap();
+        delete_path_inner(&d).unwrap();
+        assert!(!d.exists());
+    }
 
     #[test]
     fn read_dir_sorts_dirs_first_and_skips_git() {

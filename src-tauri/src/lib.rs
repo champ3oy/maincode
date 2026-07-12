@@ -47,6 +47,11 @@ pub fn run() {
             get_launch_path,
             fs_ops::read_dir,
             fs_ops::read_file,
+            fs_ops::write_file,
+            fs_ops::create_file,
+            fs_ops::create_dir,
+            fs_ops::rename_path,
+            fs_ops::delete_path,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
