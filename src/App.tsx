@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
+import { IconFilePlus, IconFolderPlus } from "@tabler/icons-react";
 import { languageKeyForPath, LANGUAGE_LABELS } from "@/lib/language";
 import {
   ResizablePanelGroup,
@@ -406,22 +407,22 @@ function App() {
                   <button
                     type="button"
                     title="New File"
-                    className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
                     onClick={() =>
                       void handleFileOp({ kind: "new-file", dir: rootPath })
                     }
                   >
-                    <span className="text-xs leading-none">+F</span>
+                    <IconFilePlus className="size-4" stroke={1.75} />
                   </button>
                   <button
                     type="button"
                     title="New Folder"
-                    className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
                     onClick={() =>
                       void handleFileOp({ kind: "new-folder", dir: rootPath })
                     }
                   >
-                    <span className="text-xs leading-none">+D</span>
+                    <IconFolderPlus className="size-4" stroke={1.75} />
                   </button>
                 </div>
               )}
