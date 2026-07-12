@@ -35,7 +35,7 @@ export const DEFAULT_DIFF_SETTINGS: DiffSettings = {
   wrap: false,
 };
 
-const STORAGE_KEY = "cub:diff-settings";
+const STORAGE_KEY = "maincode:diff-settings";
 
 function isFontChoice(value: unknown): value is FontChoice {
   return value === "app-mono" || value === "system-mono" || value === "courier";
