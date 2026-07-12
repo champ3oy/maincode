@@ -1,5 +1,6 @@
 mod git;
 mod watcher;
+mod fs_ops;
 
 use git::AppState;
 use std::path::PathBuf;
@@ -44,6 +45,8 @@ pub fn run() {
             git::list_branches,
             git::checkout_branch,
             get_launch_path,
+            fs_ops::read_dir,
+            fs_ops::read_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
