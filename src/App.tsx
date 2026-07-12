@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
-import { IconFilePlus, IconFolderPlus } from "@tabler/icons-react";
 import { languageKeyForPath, LANGUAGE_LABELS } from "@/lib/language";
 import {
   ResizablePanelGroup,
@@ -34,7 +33,7 @@ import { useEditor } from "@/hooks/use-editor";
 import { EditorArea } from "@/components/editor/editor-area";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { useDiffs } from "@/hooks/use-diffs";
-import { SidebarSwitch, type SidebarTab } from "@/components/sidebar/sidebar-switch";
+import { TitleBar, type SidebarTab } from "@/components/titlebar/title-bar";
 import { SourceControlPanel } from "@/components/source-control/source-control-panel";
 import { cn } from "@/lib/utils";
 import {
@@ -47,6 +46,7 @@ import {
 import { CommandPalette, type PaletteCommand } from "@/components/command-palette/command-palette";
 import { TerminalPanel } from "@/components/terminal/terminal-panel";
 
+// 
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
@@ -385,19 +385,19 @@ function App() {
         }}
       />
       <div className="flex h-full flex-col">
+        <TitleBar
+          title={rootName ?? "Maincode"}
+          activeTab={sidebarTab}
+          gitAvailable={gitAvailable}
+          changeCount={(status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)}
+          onSelectTab={setSidebarTab}
+        />
         <ResizablePanelGroup
           orientation="horizontal"
-          className="isolate min-h-0 flex-1 border-t border-border bg-background"
+          className="isolate min-h-0 flex-1 bg-background"
         >
           <ResizablePanel defaultSize="22%" minSize={220} maxSize={400}>
             <div className="flex h-full flex-col bg-sidebar">
-              {/* Tab switcher — always visible */}
-              <SidebarSwitch
-                active={sidebarTab}
-                changeCount={(status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)}
-                gitAvailable={gitAvailable}
-                onSelect={setSidebarTab}
-              />
               {/* Files tab header (New File / New Folder buttons) */}
               {sidebarTab === "files" && (
                 <div className="flex h-10 items-center border-b border-border px-3">
@@ -407,22 +407,22 @@ function App() {
                   <button
                     type="button"
                     title="New File"
-                    className="ml-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
                     onClick={() =>
                       void handleFileOp({ kind: "new-file", dir: rootPath })
                     }
                   >
-                    <IconFilePlus className="size-4" stroke={1.75} />
+                    <span className="text-xs leading-none">+F</span>
                   </button>
                   <button
                     type="button"
                     title="New Folder"
-                    className="ml-1 flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+                    className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
                     onClick={() =>
                       void handleFileOp({ kind: "new-folder", dir: rootPath })
                     }
                   >
-                    <IconFolderPlus className="size-4" stroke={1.75} />
+                    <span className="text-xs leading-none">+D</span>
                   </button>
                 </div>
               )}
