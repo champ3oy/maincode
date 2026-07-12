@@ -69,6 +69,12 @@ pub fn pty_spawn(
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut cmd = CommandBuilder::new(&shell);
+    // Spawn a *login* shell so it sources the user's full profile. A GUI app
+    // launched from Finder inherits only a minimal PATH; macOS adds entries like
+    // /opt/homebrew/bin via path_helper, which runs from /etc/zprofile and thus
+    // only for login shells. Without -l, tools on that PATH (e.g. `claude`) are
+    // "command not found" in the integrated terminal.
+    cmd.arg("-l");
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
