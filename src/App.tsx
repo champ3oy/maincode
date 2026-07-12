@@ -43,6 +43,7 @@ import {
   listFilesRecursive,
 } from "@/lib/fs";
 import { CommandPalette, type PaletteCommand } from "@/components/command-palette/command-palette";
+import { TerminalPanel } from "@/components/terminal/terminal-panel";
 
 function App() {
   const { rootPath, rootName, openFolder } = useWorkspace();
@@ -86,12 +87,19 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteFiles, setPaletteFiles] = useState<string[]>([]);
 
-  // Cmd+K / Cmd+P → toggle command palette
+  // Terminal panel state
+  const [showTerminal, setShowTerminal] = useState(false);
+
+  // Cmd+K / Cmd+P → toggle command palette; Ctrl+` → toggle terminal
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "p")) {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      }
+      if (e.ctrlKey && e.key === "`") {
+        e.preventDefault();
+        setShowTerminal((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -190,6 +198,7 @@ function App() {
     { id: "theme-light", label: "Theme: Light", run: () => setTheme("light") },
     { id: "theme-dark", label: "Theme: Dark", run: () => setTheme("dark") },
     { id: "theme-system", label: "Theme: System", run: () => setTheme("system") },
+    { id: "toggle-terminal", label: "Toggle Terminal", run: () => setShowTerminal((v) => !v) },
   ], [activeTab, saveFile, setTheme, handleOpenFolderDialog]);
 
   // Restore: CLI launch path first, then last opened folder.
@@ -427,23 +436,35 @@ function App() {
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel defaultSize="78%">
-            {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
-            <div className={cn(sidebarTab === "changes" && "hidden", "h-full")}>
-              <EditorArea />
-            </div>
-            {sidebarTab === "changes" && (
-              <DiffPanel
-                files={allFiles}
-                diffs={diffs}
-                loading={diffsLoading}
-                diffStyle={diffStyle}
-                onDiffStyleChange={setDiffStyle}
-                allExpanded={allExpanded}
-                onToggleExpandAll={() => setAllExpanded((v) => !v)}
-                scrollToPath={scrollToPath}
-                scrollNonce={scrollNonce}
-              />
-            )}
+            <ResizablePanelGroup orientation="vertical">
+              <ResizablePanel defaultSize="70%">
+                {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
+                <div className={cn(sidebarTab === "changes" && "hidden", "h-full")}>
+                  <EditorArea />
+                </div>
+                {sidebarTab === "changes" && (
+                  <DiffPanel
+                    files={allFiles}
+                    diffs={diffs}
+                    loading={diffsLoading}
+                    diffStyle={diffStyle}
+                    onDiffStyleChange={setDiffStyle}
+                    allExpanded={allExpanded}
+                    onToggleExpandAll={() => setAllExpanded((v) => !v)}
+                    scrollToPath={scrollToPath}
+                    scrollNonce={scrollNonce}
+                  />
+                )}
+              </ResizablePanel>
+              {showTerminal && (
+                <>
+                  <ResizableHandle />
+                  <ResizablePanel defaultSize="30%" minSize={80}>
+                    <TerminalPanel cwd={rootPath} />
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
           </ResizablePanel>
         </ResizablePanelGroup>
         {gitAvailable && workdir ? (
