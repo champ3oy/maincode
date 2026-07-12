@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
-import { IconFilePlus, IconFolderPlus } from "@tabler/icons-react";
+import { IconFilePlus, IconFolderPlus, IconSearch, IconX } from "@tabler/icons-react";
 import { languageKeyForPath, LANGUAGE_LABELS } from "@/lib/language";
 import {
   ResizablePanelGroup,
@@ -81,6 +81,10 @@ function App() {
     }
     return files;
   }, [status]);
+
+  // File tree search
+  const [treeSearchOpen, setTreeSearchOpen] = useState(false);
+  const [treeSearch, setTreeSearch] = useState("");
 
   // File tree refresh nonce: bump to trigger a tree reload
   const [treeRefreshNonce, setTreeRefreshNonce] = useState(0);
@@ -427,6 +431,22 @@ function App() {
                   </span>
                   <button
                     type="button"
+                    title="Search files"
+                    className={cn(
+                      "ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent",
+                      treeSearchOpen && "bg-accent text-accent-foreground",
+                    )}
+                    onClick={() =>
+                      setTreeSearchOpen((v) => {
+                        if (v) setTreeSearch("");
+                        return !v;
+                      })
+                    }
+                  >
+                    <IconSearch className="size-4" stroke={1.75} />
+                  </button>
+                  <button
+                    type="button"
                     title="New File"
                     className="ml-1 flex h-6 w-6 items-center justify-center rounded hover:bg-accent"
                     onClick={() =>
@@ -447,6 +467,34 @@ function App() {
                   </button>
                 </div>
               )}
+              {sidebarTab === "files" && treeSearchOpen && (
+                <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border px-3">
+                  <IconSearch className="text-muted-foreground size-3.5 shrink-0" />
+                  <input
+                    autoFocus
+                    value={treeSearch}
+                    onChange={(e) => setTreeSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setTreeSearch("");
+                        setTreeSearchOpen(false);
+                      }
+                    }}
+                    placeholder="Search files…"
+                    className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent text-xs outline-none"
+                  />
+                  {treeSearch && (
+                    <button
+                      type="button"
+                      title="Clear"
+                      className="text-muted-foreground shrink-0 rounded p-0.5 hover:bg-accent hover:text-foreground"
+                      onClick={() => setTreeSearch("")}
+                    >
+                      <IconX className="size-3.5" />
+                    </button>
+                  )}
+                </div>
+              )}
               {/* Sidebar body: Files or Changes */}
               {sidebarTab === "files" ? (
                 <div className="min-h-0 flex-1 overflow-auto p-2">
@@ -455,6 +503,7 @@ function App() {
                     onOpenFile={(path) => void openFile(path)}
                     onFileOp={handleFileOp}
                     refreshNonce={treeRefreshNonce}
+                    searchQuery={treeSearchOpen ? treeSearch : ""}
                   />
                 </div>
               ) : (

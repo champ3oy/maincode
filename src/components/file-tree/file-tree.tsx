@@ -1,7 +1,7 @@
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
 import { FileTree as PierreFileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
 import { listen } from "@tauri-apps/api/event";
-import { readDir, type DirEntryInfo } from "@/lib/fs";
+import { listFilesRecursive, readDir, type DirEntryInfo } from "@/lib/fs";
 import { FileTreeContextMenu } from "./file-tree-context-menu";
 
 export type FileOp =
@@ -15,6 +15,19 @@ interface FileTreeProps {
   onOpenFile: (path: string) => void;
   onFileOp: (op: FileOp) => void;
   refreshNonce?: number;
+  /** When non-empty, the tree shows only files whose path matches. */
+  searchQuery?: string;
+}
+
+// Ancestor directory model-paths (with trailing slash) for a relative file
+// path, e.g. "src/a/b.ts" -> ["src/", "src/a/"].
+function ancestorDirs(relFilePath: string): string[] {
+  const parts = relFilePath.split("/");
+  const dirs: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    dirs.push(parts.slice(0, i).join("/") + "/");
+  }
+  return dirs;
 }
 
 // `@pierre/trees` builds its tree from the path segments it is given, so the
@@ -45,6 +58,7 @@ export function FileTree({
   onOpenFile,
   onFileOp,
   refreshNonce = 0,
+  searchQuery = "",
 }: FileTreeProps) {
   // Kept current every render so the stable helpers below always see the
   // latest root without re-triggering effects.
@@ -68,6 +82,12 @@ export function FileTree({
   const expandedModelPaths = useRef<Set<string>>(new Set());
   // Last selection path we acted on (dedup guard for the selection effect).
   const lastHandledRef = useRef<string | null>(null);
+  // Cached full project file list (relative paths) for search; invalidated on
+  // root change / refresh. `searchingRef` lets the selection effect skip lazy
+  // loading while a search is active.
+  const allFilesRef = useRef<string[] | null>(null);
+  const wasSearchingRef = useRef(false);
+  const searchingRef = useRef(false);
 
   const { model } = useFileTree({
     id: "files-browser",
@@ -95,6 +115,7 @@ export function FileTree({
     loadedDirs.current = new Set();
     expandedModelPaths.current = new Set();
     lastHandledRef.current = null;
+    allFilesRef.current = null;
     setPaths([]);
 
     readDir(absRoot)
@@ -133,9 +154,49 @@ export function FileTree({
         if (modelPathSet.has(mp)) stillExpanded.add(mp);
       }
       expandedModelPaths.current = stillExpanded;
+      allFilesRef.current = null;
       setPaths([...modelPathSet]);
     });
   }, [toModelPath]);
+
+  // Search: filter the whole project by name. Fetches the full (non-ignored)
+  // file list once, then shows matching files with their folders expanded.
+  // Clearing the query restores the normal lazy tree.
+  useEffect(() => {
+    const q = searchQuery.trim().toLowerCase();
+    searchingRef.current = q !== "";
+    const absRoot = normalizeRoot(rootPath);
+
+    if (q) {
+      wasSearchingRef.current = true;
+      const apply = (all: string[]) => {
+        const matches = all.filter((f) => f.toLowerCase().includes(q));
+        const dirs = new Set<string>();
+        for (const m of matches) for (const d of ancestorDirs(m)) dirs.add(d);
+        expandedModelPaths.current = dirs;
+        setPaths([...dirs, ...matches]);
+      };
+      if (allFilesRef.current) {
+        apply(allFilesRef.current);
+      } else {
+        listFilesRecursive(absRoot)
+          .then((files) => {
+            allFilesRef.current = files;
+            if (searchingRef.current) apply(files);
+          })
+          .catch(() => {});
+      }
+    } else if (wasSearchingRef.current) {
+      // Query cleared — restore the normal lazy tree from the root.
+      wasSearchingRef.current = false;
+      loadedDirs.current = new Set([absRoot]);
+      expandedModelPaths.current = new Set();
+      lastHandledRef.current = null;
+      readDir(absRoot)
+        .then((entries) => setPaths(entries.map(toModelPath)))
+        .catch(() => {});
+    }
+  }, [searchQuery, rootPath, toModelPath]);
 
   // refreshNonce prop: bump to force reload
   const prevNonce = useRef(0);
@@ -177,6 +238,10 @@ export function FileTree({
       onOpenFile(toAbs(path));
       return;
     }
+
+    // In search mode the matching files are already loaded — don't lazy-load
+    // (that would pull in non-matching siblings).
+    if (searchingRef.current) return;
 
     // It's a directory — absolute fs path for readDir.
     const fsPath = toAbs(path);
