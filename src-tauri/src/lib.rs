@@ -1,4 +1,5 @@
 mod git;
+mod menu;
 mod watcher;
 mod fs_ops;
 mod pty;
@@ -7,7 +8,7 @@ use git::AppState;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Mutex, OnceLock};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 static LAUNCH_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -27,6 +28,12 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .menu(|handle| menu::build_menu(handle))
+        .on_menu_event(|app, event| {
+            // Forward custom menu-item ids to the frontend; predefined items
+            // (copy/paste/quit/…) are handled natively.
+            let _ = app.emit("menu-action", event.id().0.as_str());
+        })
         .manage(AppState {
             repo: Mutex::new(None),
             watcher: Mutex::new(None),

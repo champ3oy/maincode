@@ -56,7 +56,7 @@ import {
 import { TerminalDock } from "@/components/terminal/terminal-dock";
 
 function App() {
-  const { rootPath, rootName, openFolder } = useWorkspace();
+  const { rootPath, rootName, openFolder, closeFolder } = useWorkspace();
   const { workdir, status, refresh, open, close } = useRepoStatus();
   const {
     openFile,
@@ -65,6 +65,8 @@ function App() {
     activeTab,
     saveFile,
     dirtyCount,
+    tabs,
+    isDirty,
   } = useEditor();
   const { addRecent } = useRecentRepos();
   const { setTheme } = useTheme();
@@ -256,6 +258,69 @@ function App() {
     const selected = await openDialog({ directory: true, multiple: false });
     if (typeof selected === "string") openFolderAndRecord(selected);
   }, [openFolderAndRecord]);
+
+  // Native menu actions (from src-tauri/src/menu.rs via the "menu-action"
+  // event). Kept in a latest-ref so the listener subscribes only once.
+  const onMenuAction = async (action: string) => {
+    switch (action) {
+      case "new-file":
+        if (rootPath) {
+          setSidebarTab("files");
+          void handleFileOp({ kind: "new-file", dir: rootPath });
+        }
+        break;
+      case "open-folder":
+        void handleOpenFolderDialog();
+        break;
+      case "save":
+        if (activeTab) void saveFile(activeTab.path);
+        break;
+      case "save-all":
+        for (const t of tabs) if (isDirty(t)) void saveFile(t.path);
+        break;
+      case "close-editor":
+        if (activeTab) {
+          if (isDirty(activeTab)) {
+            const ok = await ask(`Close ${activeTab.name} without saving?`, {
+              title: "Unsaved changes",
+              kind: "warning",
+            });
+            if (!ok) return;
+          }
+          closeTab(activeTab.path);
+        }
+        break;
+      case "close-folder":
+        closeFolder();
+        break;
+      case "command-palette":
+        setPaletteOpen((v) => !v);
+        break;
+      case "search-files":
+        setSidebarTab("files");
+        setTreeSearchOpen(true);
+        break;
+      case "toggle-terminal":
+        setShowTerminal((v) => !v);
+        break;
+    }
+  };
+  const menuActionRef = useRef(onMenuAction);
+  menuActionRef.current = onMenuAction;
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    listen<string>("menu-action", (e) => {
+      void menuActionRef.current(e.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const paletteCommands = useMemo<PaletteCommand[]>(
     () => [
