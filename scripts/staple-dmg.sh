@@ -16,7 +16,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-DMG="${1:-src-tauri/target/release/bundle/dmg/Maincode_0.1.0_aarch64.dmg}"
+DMG="${1:-$(ls -t src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)}"
 if [ ! -f "$DMG" ]; then
   echo "No DMG at $DMG — build it first (scripts/build-mac.sh)." >&2
   exit 1
