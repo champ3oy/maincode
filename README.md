@@ -5,6 +5,8 @@ A simple code editor without the bloatware.
 Built on Tauri v2 + React + CodeMirror 6,
 derived from [cub.dev](https://github.com/ephraimduncan/cub.dev).
 
+![Maincode](docs/screenshot.png)
+
 ## Features
 
 - Open any folder: file tree, tabs, syntax highlighting, find & replace (Cmd+F)
