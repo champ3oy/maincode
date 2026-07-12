@@ -204,11 +204,11 @@ export function SourceControlPanel({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="flex min-h-0 flex-1 flex-col">
         {empty ? (
           <p className="px-3 py-4 text-xs text-muted-foreground">No changes</p>
         ) : (
-          <div className="flex h-full flex-col">
+          <>
             {staged.length > 0 && (
               <Section
                 label="Staged"
@@ -234,7 +234,7 @@ export function SourceControlPanel({
                 onDiscard={onDiscardFile}
               />
             )}
-          </div>
+          </>
         )}
       </div>
       <CommitBar stagedCount={staged.length} onCommit={onCommit} />

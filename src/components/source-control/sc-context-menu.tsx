@@ -1,4 +1,7 @@
+import type { CSSProperties } from "react";
 import type { ContextMenuItem, ContextMenuOpenContext } from "@pierre/trees";
+import { Menu as MenuPrimitive } from "@base-ui/react/menu";
+import { cn } from "@/lib/utils";
 
 interface ScContextMenuProps {
   item: ContextMenuItem;
@@ -9,6 +12,28 @@ interface ScContextMenuProps {
   onDiscard?: (path: string) => void;
 }
 
+function getFloatingTriggerStyle(
+  anchorRect: ContextMenuOpenContext["anchorRect"],
+): CSSProperties {
+  return {
+    border: 0,
+    height: 1,
+    left: `${anchorRect.left}px`,
+    opacity: 0,
+    padding: 0,
+    pointerEvents: "none",
+    position: "fixed",
+    top: `${anchorRect.bottom - 1}px`,
+    width: 1,
+  };
+}
+
+function getSideOffset(
+  anchorRect: ContextMenuOpenContext["anchorRect"],
+): number {
+  return anchorRect.width === 0 && anchorRect.height === 0 ? 0 : -2;
+}
+
 export function ScContextMenu({
   item,
   context,
@@ -17,82 +42,100 @@ export function ScContextMenu({
   onUnstage,
   onDiscard,
 }: ScContextMenuProps) {
-  const { anchorRect } = context;
-
-  const style: React.CSSProperties = {
-    position: "fixed",
-    top: anchorRect.bottom,
-    left: anchorRect.left,
-    zIndex: 50,
-    minWidth: 140,
-    background: "var(--popover)",
-    border: "1px solid var(--border)",
-    borderRadius: "6px",
-    padding: "4px",
-    boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
-    color: "var(--popover-foreground)",
-    fontSize: "12px",
-  };
-
-  const itemStyle: React.CSSProperties = {
-    padding: "5px 8px",
-    borderRadius: "4px",
-    cursor: "pointer",
-    display: "block",
-    width: "100%",
-    textAlign: "left",
-    background: "transparent",
-    border: "none",
-    color: "inherit",
-  };
-
   return (
-    <div style={style} data-file-tree-context-menu-root="true">
-      {isStaged && onUnstage && (
-        <button
-          type="button"
-          style={itemStyle}
-          onClick={() => { context.close(); onUnstage(item.path); }}
-          onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-          onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
+    <MenuPrimitive.Root
+      open
+      modal={false}
+      onOpenChange={(open) => {
+        if (!open) context.close();
+      }}
+    >
+      <MenuPrimitive.Trigger
+        render={
+          <button
+            type="button"
+            tabIndex={-1}
+            style={getFloatingTriggerStyle(context.anchorRect)}
+          />
+        }
+      />
+      <MenuPrimitive.Portal>
+        <MenuPrimitive.Positioner
+          className="isolate z-50 outline-none"
+          align="start"
+          side="bottom"
+          sideOffset={getSideOffset(context.anchorRect)}
         >
-          Unstage
-        </button>
+          <MenuPrimitive.Popup
+            data-file-tree-context-menu-root="true"
+            className={cn(
+              "z-50 min-w-40 origin-(--transform-origin) rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 outline-none",
+            )}
+          >
+            {isStaged && onUnstage && (
+              <MenuItem
+                onClick={() => {
+                  context.close();
+                  onUnstage(item.path);
+                }}
+              >
+                Unstage
+              </MenuItem>
+            )}
+            {!isStaged && onStage && (
+              <MenuItem
+                onClick={() => {
+                  context.close();
+                  onStage(item.path);
+                }}
+              >
+                Stage
+              </MenuItem>
+            )}
+            {!isStaged && onDiscard && (
+              <MenuItem
+                destructive
+                onClick={() => {
+                  context.close();
+                  onDiscard(item.path);
+                }}
+              >
+                Discard Changes
+              </MenuItem>
+            )}
+            <MenuItem
+              onClick={() => {
+                context.close();
+                navigator.clipboard.writeText(item.path).catch(() => {});
+              }}
+            >
+              Copy Path
+            </MenuItem>
+          </MenuPrimitive.Popup>
+        </MenuPrimitive.Positioner>
+      </MenuPrimitive.Portal>
+    </MenuPrimitive.Root>
+  );
+}
+
+function MenuItem({
+  onClick,
+  children,
+  destructive,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+  destructive?: boolean;
+}) {
+  return (
+    <MenuPrimitive.Item
+      onClick={onClick}
+      className={cn(
+        "relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground",
+        destructive && "text-destructive focus:bg-destructive/10 focus:text-destructive",
       )}
-      {!isStaged && onStage && (
-        <button
-          type="button"
-          style={itemStyle}
-          onClick={() => { context.close(); onStage(item.path); }}
-          onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-          onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
-        >
-          Stage
-        </button>
-      )}
-      {!isStaged && onDiscard && (
-        <button
-          type="button"
-          style={itemStyle}
-          onClick={() => { context.close(); onDiscard(item.path); }}
-          onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-          onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
-        >
-          Discard Changes
-        </button>
-      )}
-      <button
-        type="button"
-        style={itemStyle}
-        onClick={() => {
-          context.close();
-          navigator.clipboard.writeText(item.path).catch(() => {});
-        }}
-        onMouseEnter={(e) => { (e.target as HTMLElement).style.background = "var(--accent)"; }}
-        onMouseLeave={(e) => { (e.target as HTMLElement).style.background = "transparent"; }}
-      >
-        Copy Path
-      </button>
-    </div>
+    >
+      {children}
+    </MenuPrimitive.Item>
   );
 }
