@@ -23,6 +23,7 @@ export function EditorArea({ onCursor, formatRoot }: EditorAreaProps) {
     saveFile,
     openFile,
     isDirty,
+    registerViewFormatter,
   } = useEditor();
 
   const tabsRef = useRef(tabs);
@@ -83,6 +84,7 @@ export function EditorArea({ onCursor, formatRoot }: EditorAreaProps) {
               onSave={(path) => void saveFile(path)}
               onCursor={onCursor}
               formatRoot={formatRoot}
+              onRegisterFormatter={registerViewFormatter}
             />
           )}
         </div>

@@ -36,6 +36,15 @@ interface EditorContextValue {
   isDirty: (tab: EditorTab) => boolean;
   /** Set the project root so formatFile can resolve .prettierrc config. */
   setFormatRoot: (root: string | null) => void;
+  /**
+   * Registered by the mounted CodeEditor: formats the ACTIVE document through
+   * the live view (visible change, cursor preserved, undoable). Returns the
+   * formatted text, or null when it can't handle the path (not the active
+   * document, or no parser).
+   */
+  registerViewFormatter: (
+    fn: (path: string, config: object) => Promise<string | null>,
+  ) => void;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -47,6 +56,19 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
   // rootPath for .prettierrc config resolution; set from App via setFormatRoot.
   const formatRootRef = useRef<string | null>(null);
+
+  // View-level formatter registered by the mounted CodeEditor. Formatting must
+  // go through the live view — a state-only edit never reaches the uncontrolled
+  // EditorView, so the buffer wouldn't visibly change.
+  const viewFormatterRef = useRef<
+    ((path: string, config: object) => Promise<string | null>) | null
+  >(null);
+  const registerViewFormatter = useCallback(
+    (fn: (path: string, config: object) => Promise<string | null>) => {
+      viewFormatterRef.current = fn;
+    },
+    [],
+  );
 
   const { settings } = useSettings();
   const settingsRef = useRef(settings);
@@ -100,19 +122,23 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const tab = stateRef.current.tabs.find((t) => t.path === path);
     if (!tab) return;
     const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
-    let formatted: string | null;
     try {
-      formatted = await formatContent(tab.content, path, config);
+      // Prefer the live view (visible change, cursor preserved, undoable).
+      // Its updateListener syncs the tab state via onChange.
+      const viaView = await viewFormatterRef.current?.(path, config);
+      if (typeof viaView === "string") return;
+
+      // Fallback (path not in the active view): format the tab content.
+      const formatted = await formatContent(tab.content, path, config);
+      if (formatted === null) {
+        toast.info("No formatter for this file type");
+        return;
+      }
+      if (formatted !== tab.content) {
+        dispatch({ type: "edit", path, content: formatted });
+      }
     } catch (err) {
       toast.error(`Format failed: ${err instanceof Error ? err.message : String(err)}`);
-      return;
-    }
-    if (formatted === null) {
-      toast.info("No formatter for this file type");
-      return;
-    }
-    if (formatted !== tab.content) {
-      dispatch({ type: "edit", path, content: formatted });
     }
   }, []);
 
@@ -124,18 +150,16 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     if (!tab) return;
     try {
       let content = tab.content;
-      // Format-on-save: format content first, then write once.
+      // Format-on-save: format the ACTIVE document through the live view
+      // (visible change, cursor preserved, single undo step), then write the
+      // formatted text once. Non-active tabs (Save All) are written as-is —
+      // formatting them behind the scenes would desync the cached editor
+      // state from the tab content.
       if (settingsRef.current.editor.formatOnSave) {
         const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
         try {
-          const formatted = await formatContent(content, path, config);
-          if (formatted !== null) {
-            content = formatted;
-            // Update editor state so UI reflects the formatted content.
-            if (formatted !== tab.content) {
-              dispatch({ type: "edit", path, content: formatted });
-            }
-          }
+          const viaView = await viewFormatterRef.current?.(path, config);
+          if (typeof viaView === "string") content = viaView;
         } catch (err) {
           // Format error on save: warn but still save the original content.
           toast.error(`Format failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -180,6 +204,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       handlePathRenamed,
       isDirty,
       setFormatRoot,
+      registerViewFormatter,
     };
   }, [
     state,
@@ -191,6 +216,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     activateTab,
     handlePathRenamed,
     setFormatRoot,
+    registerViewFormatter,
   ]);
 
   return (

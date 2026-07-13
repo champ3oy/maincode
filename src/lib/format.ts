@@ -194,15 +194,17 @@ export async function formatContent(
 /**
  * Format the document in `view` for the given `filePath`, preserving the
  * cursor position.  Dispatches a single replace-all transaction so undo works.
- * Returns false if no parser is available.  Throws on syntax errors.
+ * Returns the formatted text (so callers can e.g. write it to disk without
+ * waiting on React state), or null if no parser is available.  Throws on
+ * syntax errors.
  */
 export async function formatWithCursorInView(
   view: EditorView,
   filePath: string,
   options: object,
-): Promise<boolean> {
+): Promise<string | null> {
   const info = inferParser(filePath);
-  if (!info) return false;
+  if (!info) return null;
 
   const [prettier, ...pluginModules] = await Promise.all([
     loadModule("prettier/standalone"),
@@ -229,8 +231,8 @@ export async function formatWithCursorInView(
     throw new Error(msg);
   }
 
-  // No-op if content unchanged (still return true — success).
-  if (formatted === docStr) return true;
+  // No-op if content unchanged (still a success).
+  if (formatted === docStr) return formatted;
 
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: formatted },
@@ -238,5 +240,5 @@ export async function formatWithCursorInView(
     scrollIntoView: true,
   });
 
-  return true;
+  return formatted;
 }

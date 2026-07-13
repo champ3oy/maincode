@@ -46,6 +46,15 @@ interface CodeEditorProps {
   onCursor?: (line: number, col: number) => void;
   /** Optional project root used to resolve .prettierrc config. */
   formatRoot?: string | null;
+  /**
+   * Registers a view-level formatter so menu/palette/format-on-save paths can
+   * format through the live editor (visible change, cursor preserved, undo).
+   * The fn returns the formatted text, or null when it can't handle the path
+   * (not the active document, or no parser).
+   */
+  onRegisterFormatter?: (
+    fn: (path: string, config: object) => Promise<string | null>,
+  ) => void;
 }
 
 export function CodeEditor({
@@ -55,6 +64,7 @@ export function CodeEditor({
   onSave,
   onCursor,
   formatRoot,
+  onRegisterFormatter,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -159,16 +169,19 @@ export function CodeEditor({
             run: (view) => {
               void (async () => {
                 const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
-                const supported = await formatWithCursorInView(view, pathRef.current, config).catch(
-                  (err: unknown) => {
-                    toast.error(
-                      `Format failed: ${err instanceof Error ? err.message : String(err)}`,
-                    );
-                    return true; // error already toasted
-                  },
-                );
-                if (!supported) {
-                  toast.info("No formatter for this file type");
+                try {
+                  const formatted = await formatWithCursorInView(
+                    view,
+                    pathRef.current,
+                    config,
+                  );
+                  if (formatted === null) {
+                    toast.info("No formatter for this file type");
+                  }
+                } catch (err) {
+                  toast.error(
+                    `Format failed: ${err instanceof Error ? err.message : String(err)}`,
+                  );
                 }
               })();
               return true;
@@ -230,6 +243,19 @@ export function CodeEditor({
     };
     // The initial doc is only read once, on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Register the view-level formatter so use-editor's formatFile / save-time
+  // formatting go through the live view (a state-only edit never reaches the
+  // uncontrolled EditorView — the buffer wouldn't visibly change).
+  const onRegisterFormatterRef = useRef(onRegisterFormatter);
+  onRegisterFormatterRef.current = onRegisterFormatter;
+  useEffect(() => {
+    onRegisterFormatterRef.current?.(async (docPath, config) => {
+      const view = viewRef.current;
+      if (!view || docPath !== pathRef.current) return null;
+      return formatWithCursorInView(view, docPath, config);
+    });
   }, []);
 
   // Swap editor state when the active path changes, caching the old one so
