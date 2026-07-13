@@ -7,7 +7,7 @@ import { search } from "@codemirror/search";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { baseSetup, completionExtensions, lintExtensions } from "@/lib/cm-setup";
-import { pierreDark, searchMatchTheme } from "@/lib/cm-theme";
+import { pierreDark, searchMatchTheme, tooltipTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
@@ -138,6 +138,7 @@ export function CodeEditor({
         // Required: initialises the search state so setSearchQuery has effect.
         search({ top: true }),
         searchMatchTheme,
+        tooltipTheme,
         keymap.of([
           {
             key: "Mod-s",

@@ -134,6 +134,72 @@ export const searchMatchTheme = EditorView.theme({
   },
 });
 
+// Restyles CodeMirror's tooltips — the autocomplete popup and lint messages —
+// to match the app chrome (popover surface, border, accent selection). Uses
+// app CSS variables so it adapts to light/dark automatically; applied in both
+// themes alongside searchMatchTheme.
+export const tooltipTheme = EditorView.theme({
+  ".cm-tooltip": {
+    backgroundColor: "var(--popover)",
+    color: "var(--popover-foreground)",
+    border: "1px solid var(--border)",
+    borderRadius: "8px",
+    overflow: "hidden",
+    boxShadow: "0 8px 24px rgba(0, 0, 0, 0.35)",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": {
+    fontFamily: "inherit",
+    maxHeight: "240px",
+    padding: "2px",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    padding: "3px 8px",
+    borderRadius: "5px",
+    lineHeight: "1.45",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    backgroundColor: "var(--accent)",
+    color: "var(--accent-foreground)",
+  },
+  ".cm-completionIcon": {
+    width: "1.1em",
+    padding: "0",
+    fontSize: "85%",
+    textAlign: "center",
+    color: "var(--muted-foreground)",
+    opacity: "0.9",
+  },
+  // The default keyword icon is an emoji key that clashes with the theme; use
+  // a monochrome glyph consistent with the other icons (𝑥, 𝑡, ƒ, …).
+  ".cm-completionIcon-keyword:after": { content: "'𝑘'" },
+  ".cm-completionLabel": { fontFamily: "inherit" },
+  ".cm-completionMatchedText": {
+    textDecoration: "none",
+    color: c.cursor,
+    fontWeight: "600",
+  },
+  ".cm-completionDetail": {
+    marginLeft: "auto",
+    paddingLeft: "12px",
+    fontStyle: "normal",
+    fontSize: "85%",
+    color: "var(--muted-foreground)",
+  },
+  ".cm-tooltip.cm-completionInfo": {
+    padding: "6px 10px",
+    maxWidth: "320px",
+  },
+  // Lint hover tooltips share the .cm-tooltip surface; tint the per-severity
+  // accent bar with the editor palette.
+  ".cm-tooltip-lint": { padding: "0" },
+  ".cm-diagnostic": { padding: "4px 10px" },
+  ".cm-diagnostic-error": { borderLeftColor: c.keyword },
+  ".cm-diagnostic-warning": { borderLeftColor: "#ffab16" },
+});
+
 /** Dark editor theme built from pierre-dark's exact palette. */
 export function pierreDark(): Extension {
   return [pierreTheme, syntaxHighlighting(pierreHighlight)];
