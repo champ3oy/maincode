@@ -89,11 +89,29 @@ describe("mergeSettings", () => {
   it("handles completely valid full settings object", () => {
     const full = {
       theme: "dark",
-      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true },
+      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false },
       terminal: { fontSize: 14 },
       diff: { fontSize: 15, fontFamily: "system-mono", wordWrap: true },
     };
     expect(mergeSettings(full)).toEqual(full);
+  });
+
+  it("accepts editor.autocomplete: false", () => {
+    expect(mergeSettings({ editor: { autocomplete: false } }).editor.autocomplete).toBe(false);
+  });
+
+  it("falls back to default autocomplete (true) for wrong type", () => {
+    expect(mergeSettings({ editor: { autocomplete: "x" } }).editor.autocomplete).toBe(true);
+    expect(mergeSettings({ editor: { autocomplete: 1 } }).editor.autocomplete).toBe(true);
+  });
+
+  it("accepts editor.linting: false", () => {
+    expect(mergeSettings({ editor: { linting: false } }).editor.linting).toBe(false);
+  });
+
+  it("falls back to default linting (true) for wrong type", () => {
+    expect(mergeSettings({ editor: { linting: "x" } }).editor.linting).toBe(true);
+    expect(mergeSettings({ editor: { linting: 0 } }).editor.linting).toBe(true);
   });
 
   it("accepts valid diff.fontFamily values", () => {

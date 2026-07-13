@@ -23,6 +23,8 @@ export interface Settings {
     fontFamily: FontChoice;
     tabSize: number;
     wordWrap: boolean;
+    autocomplete: boolean;
+    linting: boolean;
   };
   terminal: {
     fontSize: number;
@@ -56,7 +58,7 @@ export type DeepPartial<T> = T extends object
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
-  editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false },
+  editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false, autocomplete: true, linting: true },
   terminal: { fontSize: 12 },
   diff: { fontSize: 13, fontFamily: "app-mono", wordWrap: false },
 };
@@ -115,6 +117,8 @@ export function mergeSettings(raw: unknown): Settings {
     ? clamp(re.tabSize, 1, 8)
     : d.editor.tabSize;
   const editorWordWrap = typeof re.wordWrap === "boolean" ? re.wordWrap : d.editor.wordWrap;
+  const editorAutocomplete = typeof re.autocomplete === "boolean" ? re.autocomplete : d.editor.autocomplete;
+  const editorLinting = typeof re.linting === "boolean" ? re.linting : d.editor.linting;
 
   // terminal
   const rt = (typeof r.terminal === "object" && r.terminal !== null)
@@ -136,7 +140,7 @@ export function mergeSettings(raw: unknown): Settings {
 
   return {
     theme,
-    editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap },
+    editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap, autocomplete: editorAutocomplete, linting: editorLinting },
     terminal: { fontSize: terminalFontSize },
     diff: { fontSize: diffFontSize, fontFamily: diffFontFamily, wordWrap: diffWordWrap },
   };
@@ -155,6 +159,8 @@ function deepMergePartial(current: Settings, partial: DeepPartial<Settings>): Se
       fontFamily: partial.editor?.fontFamily ?? current.editor.fontFamily,
       tabSize: partial.editor?.tabSize ?? current.editor.tabSize,
       wordWrap: partial.editor?.wordWrap ?? current.editor.wordWrap,
+      autocomplete: partial.editor?.autocomplete ?? current.editor.autocomplete,
+      linting: partial.editor?.linting ?? current.editor.linting,
     },
     terminal: {
       fontSize: partial.terminal?.fontSize ?? current.terminal.fontSize,
