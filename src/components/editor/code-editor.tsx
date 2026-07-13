@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { Compartment, EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorState, EditorSelection, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
@@ -13,6 +13,15 @@ import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
+import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
+import {
+  tsCompletionSource,
+  tsLinterExtension,
+  tsHoverExtension,
+  tsGoToDefHoverAffordance,
+} from "@/lib/ts-worker/cm";
+import { scriptKindForPath } from "@/lib/ts-worker/mapping";
+import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -55,6 +64,21 @@ interface CodeEditorProps {
   onRegisterFormatter?: (
     fn: (path: string, config: object) => Promise<string | null>,
   ) => void;
+  /**
+   * Cmd/Ctrl+Click go-to-definition. Called with the resolved TS definition
+   * target so the app can open the file and reveal the location. Only wired when
+   * the TS worker is enabled (see `typescript` gate). If omitted, Cmd+Click is
+   * a no-op and normal text interaction is preserved.
+   */
+  onGoToDefinition?: (target: DefinitionResult) => void;
+  /**
+   * When set and it matches the active path, the editor scrolls to and selects
+   * the start of `line` (1-based) exactly once, then calls `onRevealConsumed`.
+   * Drives cross-file go-to-definition: App sets this after openFile so the
+   * newly-mounted (or already-mounted) editor jumps to the target line.
+   */
+  revealTarget?: { path: string; line: number; column: number } | null;
+  onRevealConsumed?: () => void;
 }
 
 export function CodeEditor({
@@ -65,6 +89,9 @@ export function CodeEditor({
   onCursor,
   formatRoot,
   onRegisterFormatter,
+  onGoToDefinition,
+  revealTarget,
+  onRevealConsumed,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -76,7 +103,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -110,6 +137,51 @@ export function CodeEditor({
   const lintingRef = useRef(linting);
   lintingRef.current = linting;
   const lintCompartment = useRef(new Compartment());
+
+  const typescriptRef = useRef(typescript);
+  typescriptRef.current = typescript;
+
+  const onGoToDefinitionRef = useRef(onGoToDefinition);
+  onGoToDefinitionRef.current = onGoToDefinition;
+  const onRevealConsumedRef = useRef(onRevealConsumed);
+  onRevealConsumedRef.current = onRevealConsumed;
+
+  // TS completion source — built once; self-gates on isTsWorkerPath + ready().
+  // The lint/hover extensions are built fresh per lint-compartment build (see
+  // buildLintExtensions) so a reconfigure installs a new linter() that re-runs.
+  const tsExtensions = useRef({
+    source: tsCompletionSource(() => pathRef.current),
+  });
+
+  /** Returns "ts" for .ts/.tsx/.mts/.cts, "js" for everything else with a TS worker path. */
+  function tsKindForPath(p: string): "ts" | "js" {
+    const k = scriptKindForPath(p);
+    return k === "ts" || k === "tsx" ? "ts" : "js";
+  }
+
+  // Single source of truth for the lint compartment's contents. Both makeState
+  // and the live-reconfigure paths (settings effect, onTypesUpdated) build
+  // identical config through here so a compartment reconfigure never diverges
+  // from the initial state. `linting`/`typescript` are passed explicitly so
+  // effects can hand in the reactive values while makeState hands in the refs.
+  const buildLintExtensions = useRef(
+    (docPath: string, lintingEnabled: boolean, tsEnabled: boolean) =>
+      lintExtensions(
+        lintingEnabled,
+        languageKeyForPath(docPath),
+        tsEnabled
+          ? {
+              // Fresh linter/hover instances per build: reconfiguring the lint
+              // compartment with a brand-new linter() forces CodeMirror to tear
+              // down the idle lint plugin and run a fresh lint. Reusing the same
+              // instances would not — see lint-refresh.test.ts.
+              linter: tsLinterExtension(() => pathRef.current),
+              hover: tsHoverExtension(() => pathRef.current),
+              kind: tsKindForPath(docPath),
+            }
+          : undefined,
+      ),
+  );
 
   // Search state + handlers from the hook.
   const [searchState, searchHandlers] = useEditorSearch(viewRef);
@@ -200,17 +272,22 @@ export function CodeEditor({
         ]),
         wrapCompartment.current.of(wordWrapRef.current ? EditorView.lineWrapping : []),
         completionCompartment.current.of(
-          completionExtensions(autocompleteRef.current),
+          completionExtensions(
+            autocompleteRef.current,
+            typescriptRef.current ? { source: tsExtensions.current.source } : undefined,
+          ),
         ),
         lintCompartment.current.of(
-          lintExtensions(lintingRef.current, languageKeyForPath(docPath)),
+          buildLintExtensions.current(docPath, lintingRef.current, typescriptRef.current),
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            onChangeRef.current(
-              pathRef.current,
-              update.state.doc.toString(),
-            );
+            const docString = update.state.doc.toString();
+            onChangeRef.current(pathRef.current, docString);
+            // Notify the TS worker of the doc change so completions/diagnostics stay fresh.
+            if (isTsWorkerPath(pathRef.current)) {
+              tsClient().notifyDocChanged(pathRef.current, docString);
+            }
             // Keep match count fresh when the document changes.
             searchHandlersRef.current.onEditorUpdate();
           }
@@ -224,6 +301,38 @@ export function CodeEditor({
             }
           }
         }),
+        // Cmd/Ctrl+Click go-to-definition. Gated on the TS worker being on
+        // (typescriptRef) and the active file being a TS-worker path; otherwise we
+        // leave the event alone so normal click/selection behaves as usual. When we
+        // do handle it we preventDefault so the browser doesn't also place the caret
+        // / start a text selection at the click point.
+        EditorView.domEventHandlers({
+          mousedown: (event, view) => {
+            if (!(event.metaKey || event.ctrlKey)) return false;
+            const goto = onGoToDefinitionRef.current;
+            if (!goto || !typescriptRef.current) return false;
+            const p = pathRef.current;
+            if (!isTsWorkerPath(p) || !tsClient().ready()) return false;
+            const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            if (offset == null) return false;
+            event.preventDefault();
+            void tsClient()
+              .getDefinition(p, offset)
+              .then((target) => {
+                if (target) goto(target);
+              });
+            return true;
+          },
+        }),
+        // Cmd/Ctrl-hover affordance: underlines the hovered identifier + shows a
+        // pointer while the modifier is held, so Cmd+Click go-to-def is
+        // discoverable. Self-gates on typescript + isTsWorkerPath; purely visual,
+        // never preventDefaults, so it never interferes with the mousedown
+        // handler above or normal selection.
+        tsGoToDefHoverAffordance(
+          () => pathRef.current,
+          () => typescriptRef.current,
+        ),
       ],
     });
   });
@@ -317,27 +426,100 @@ export function CodeEditor({
 
   // Apply autocomplete live; path dep ensures JSON-specific linter is correct
   // after tab swaps (lint compartment depends on languageKey for JSON linter).
+  // typescript dep ensures TS sources are added/removed when the toggle changes.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: completionCompartment.current.reconfigure(
-        completionExtensions(autocomplete),
+        completionExtensions(
+          autocomplete,
+          typescript ? { source: tsExtensions.current.source } : undefined,
+        ),
       ),
     });
-  }, [autocomplete, path]);
+  }, [autocomplete, typescript, path]);
 
   // Apply linting live; path dep recomputes languageKey so JSON docs get the
-  // JSON linter after tab swaps.
+  // JSON linter after tab swaps. typescript dep gates TS diagnostic sources.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: lintCompartment.current.reconfigure(
-        lintExtensions(linting, languageKeyForPath(path)),
+        buildLintExtensions.current(path, linting, typescript),
       ),
     });
-  }, [linting, path]);
+  }, [linting, typescript, path]);
+
+  // When the TS worker loads new types (e.g., node_modules/@types), re-run the
+  // linter so diagnostics reflect the updated type info.
+  //
+  // We RECONFIGURE the lint compartment with a freshly-built lint extension
+  // rather than calling forceLinting(view). forceLinting is a no-op once the
+  // editor is idle: CodeMirror's lint plugin only forces a run when a lint is
+  // already scheduled (`this.set === true`), and after the initial lint applies
+  // with no subsequent doc change nothing re-schedules one. So the stale
+  // "Cannot find module" errors on the first-opened file never cleared until a
+  // tab switch rebuilt the state. Installing a NEW linter() instance tears down
+  // the idle lint plugin and runs a fresh lint against the converged (clean)
+  // diagnostics. Proven in lint-refresh.test.ts.
+  //
+  // Warm-up fires many `typesUpdated` events (one per resolution round); debounce
+  // so the burst collapses into ONE reconfigure after types settle.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsub = tsClient().onTypesUpdated(() => {
+      if (!isTsWorkerPath(pathRef.current)) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const view = viewRef.current;
+        if (!view) return;
+        view.dispatch({
+          effects: lintCompartment.current.reconfigure(
+            buildLintExtensions.current(
+              pathRef.current,
+              lintingRef.current,
+              typescriptRef.current,
+            ),
+          ),
+        });
+      }, 300);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsub();
+    };
+  }, []);
+
+  // Go-to-definition reveal: when App sets `revealTarget` for the ACTIVE path
+  // (after openFile), scroll to and select the start of the target line ONCE,
+  // then clear it via onRevealConsumed. The `path` dep ensures this runs after a
+  // cross-file swap has mounted the target document's state (pathRef === path by
+  // then). Same-file jumps also land here since the effect re-fires on the new
+  // revealTarget. We select the line start (column is available but line-level
+  // placement is the robust, expected behavior for go-to-definition).
+  useEffect(() => {
+    if (!revealTarget || revealTarget.path !== path) return;
+    const view = viewRef.current;
+    if (!view) return;
+    const doc = view.state.doc;
+    if (revealTarget.line < 1 || revealTarget.line > doc.lines) {
+      onRevealConsumedRef.current?.();
+      return;
+    }
+    const lineInfo = doc.line(revealTarget.line);
+    const col = Math.max(1, revealTarget.column);
+    const pos = Math.min(lineInfo.from + (col - 1), lineInfo.to);
+    view.dispatch({
+      selection: EditorSelection.cursor(pos),
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
+      scrollIntoView: true,
+    });
+    view.focus();
+    onRevealConsumedRef.current?.();
+  }, [revealTarget, path]);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">

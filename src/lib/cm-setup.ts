@@ -46,6 +46,7 @@ import {
   type Diagnostic,
 } from "@codemirror/lint";
 import { jsonParseLinter } from "@codemirror/lang-json";
+import type { CompletionSource } from "@codemirror/autocomplete";
 import type { LanguageKey } from "./language";
 
 // ---------------------------------------------------------------------------
@@ -107,12 +108,24 @@ export const baseSetup: Extension = (() => [
  * `completeAnyWord` is registered as a global additional source via
  * `EditorState.languageData` so it supplements (not overrides) language-
  * specific sources on every language.
+ *
+ * When `ts` is provided, the TS completion source is added alongside
+ * `completeAnyWord`. TS results are boosted so they rank first; word
+ * completions remain the warm-up fallback. The TS source self-gates on
+ * `isTsWorkerPath` and `tsClient().ready()` so it can be registered
+ * unconditionally.
  */
-export function completionExtensions(enabled: boolean): Extension {
+export function completionExtensions(
+  enabled: boolean,
+  ts?: { source: CompletionSource },
+): Extension {
   if (!enabled) return [];
+  const sources = ts
+    ? [{ autocomplete: completeAnyWord }, { autocomplete: ts.source }]
+    : [{ autocomplete: completeAnyWord }];
   return [
     autocompletion(),
-    EditorState.languageData.of(() => [{ autocomplete: completeAnyWord }]),
+    EditorState.languageData.of(() => sources),
   ];
 }
 
@@ -147,17 +160,34 @@ const syntaxErrorLinter = linter((view) => {
 /**
  * Returns lint extensions when enabled, or an empty array.
  *
- * Always includes: `lintGutter()` + the Lezer syntax-error linter.
- * For JSON files, also includes `jsonParseLinter()` for precise parse errors.
+ * Always includes: `lintGutter()`.
+ * For JSON files: also includes `jsonParseLinter()` for precise parse errors
+ *   (Lezer syntax linter unchanged).
+ * When `ts` is provided:
+ *   - kind "ts": Lezer syntax linter OMITTED; TS linter + hover replaces it.
+ *   - kind "js": Lezer syntax linter kept AND TS linter/hover added (no dedupe v1).
  */
 export function lintExtensions(
   enabled: boolean,
   languageKey: LanguageKey | null,
+  ts?: { linter: Extension; hover: Extension; kind: "ts" | "js" },
 ): Extension {
   if (!enabled) return [];
-  const extensions: Extension[] = [lintGutter(), syntaxErrorLinter];
+  const extensions: Extension[] = [lintGutter()];
   if (languageKey === "json") {
-    extensions.push(linter(jsonParseLinter()));
+    // JSON: Lezer for syntax + json-specific parse linter; no TS worker.
+    extensions.push(syntaxErrorLinter, linter(jsonParseLinter()));
+  } else if (ts) {
+    if (ts.kind === "ts") {
+      // TS/TSX: TS diagnostics replace Lezer syntax linter.
+      extensions.push(ts.linter, ts.hover);
+    } else {
+      // JS/JSX: keep Lezer + add TS diagnostics (dedupe not required v1).
+      extensions.push(syntaxErrorLinter, ts.linter, ts.hover);
+    }
+  } else {
+    // No TS worker: Lezer syntax linter only.
+    extensions.push(syntaxErrorLinter);
   }
   return extensions;
 }

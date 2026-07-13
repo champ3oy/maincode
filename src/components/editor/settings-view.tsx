@@ -269,6 +269,18 @@ export function SettingsView({ onEditJson }: SettingsViewProps) {
           />
         ),
       },
+      {
+        id: "editor-typescript",
+        label: "TypeScript Intelligence",
+        description: "Semantic completions, auto-imports, and type errors for JS/TS.",
+        category: "Editor",
+        control: (
+          <Toggle
+            value={settings.editor.typescript}
+            onChange={(typescript) => patch({ editor: { typescript } })}
+          />
+        ),
+      },
       // Terminal
       {
         id: "terminal-font-size",

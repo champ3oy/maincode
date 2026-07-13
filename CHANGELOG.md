@@ -9,6 +9,7 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- Editor: **TypeScript intelligence** — semantic completions with **auto-import** (e.g. `useState` before it's imported), `obj.` member completions, real TypeScript error squiggles, and **hover type info** for JS/TS projects — powered by the TypeScript compiler in a background worker, fully offline. Toggle in ⌘, → Editor.
 - Editor: **Prettier formatting** — format the active file via ⇧⌥F, *Edit → Format Document*, or the
   command-center "Format Document" entry. Supported types: JS/JSX/MJS/CJS (Babel), TS/TSX/MTS/CTS
   (TypeScript), JSON/JSONC/JSON5, CSS/SCSS/LESS, HTML, Markdown, YAML. The ⇧⌥F path preserves the

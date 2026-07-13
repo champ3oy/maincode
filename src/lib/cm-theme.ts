@@ -6,7 +6,7 @@ import { tags as t } from "@lezer/highlight";
 // Colors extracted verbatim from `@pierre/theme` "pierre-dark" — the exact
 // theme the diff/code-review view (@pierre/diffs) renders with. Driving the
 // CodeMirror editor from the same palette makes the two surfaces match.
-const c = {
+export const c = {
   fg: "#fafafa",
   comment: "#737373",
   string: "#5ecc71",
@@ -30,6 +30,39 @@ const c = {
   lineNumber: "#737373",
   lineNumberActive: "#a3a3a3",
 };
+
+/**
+ * Maps a TypeScript `SymbolDisplayPart.kind` to a pierre-palette color for the
+ * hover-tooltip signature, mirroring the editor's own syntax highlighting.
+ * Returns `undefined` for kinds that should render in the default foreground
+ * (punctuation, operators, whitespace, plain text) so no <span> color is set.
+ */
+export function hoverKindColor(kind: string): string | undefined {
+  switch (kind) {
+    case "keyword":
+      return c.keyword;
+    case "functionName":
+    case "methodName":
+      return c.func;
+    case "className":
+    case "interfaceName":
+    case "enumName":
+    case "typeParameterName":
+    case "aliasName":
+      return c.type;
+    case "parameterName":
+    case "propertyName":
+    case "localName":
+      return c.variable;
+    case "stringLiteral":
+      return c.string;
+    case "numericLiteral":
+      return c.number;
+    // punctuation / operator / space / text → default foreground (no color)
+    default:
+      return undefined;
+  }
+}
 
 const pierreHighlight = HighlightStyle.define([
   { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: c.comment },
@@ -198,6 +231,56 @@ export const tooltipTheme = EditorView.theme({
   ".cm-diagnostic": { padding: "4px 10px" },
   ".cm-diagnostic-error": { borderLeftColor: c.keyword },
   ".cm-diagnostic-warning": { borderLeftColor: "#ffab16" },
+
+  // ---- TS quick-info hover (Zed-style) -------------------------------------
+  // Scrollable card: highlighted signature, divider, then full markdown docs.
+  ".cm-ts-hover": {
+    maxWidth: "520px",
+    maxHeight: "320px",
+    overflowY: "auto",
+    padding: "8px 10px",
+    fontSize: "12px",
+    lineHeight: "1.5",
+  },
+  ".cm-ts-hover-sig": {
+    fontFamily: "'App Mono', ui-monospace, monospace",
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  },
+  ".cm-ts-hover-divider": {
+    border: "none",
+    borderTop: "1px solid var(--border)",
+    margin: "6px 0",
+  },
+  ".cm-ts-hover-docs p": { margin: "4px 0" },
+  ".cm-ts-hover-docs p:first-child": { marginTop: "0" },
+  ".cm-ts-hover-docs p:last-child": { marginBottom: "0" },
+  ".cm-ts-hover code": {
+    fontFamily: "'App Mono', ui-monospace, monospace",
+    background: "rgba(255, 255, 255, 0.08)",
+    borderRadius: "3px",
+    padding: "0 3px",
+    fontSize: "92%",
+  },
+  ".cm-ts-hover-code": {
+    fontFamily: "'App Mono', ui-monospace, monospace",
+    background: "rgba(255, 255, 255, 0.05)",
+    border: "1px solid var(--border)",
+    borderRadius: "6px",
+    padding: "6px 8px",
+    margin: "4px 0",
+    overflowX: "auto",
+    whiteSpace: "pre",
+  },
+  ".cm-ts-hover-code code": { background: "none", padding: "0", fontSize: "100%" },
+  ".cm-ts-hover a": {
+    color: c.cursor,
+    textDecoration: "none",
+    cursor: "default",
+  },
+  ".cm-ts-hover a:hover": { textDecoration: "underline" },
+  ".cm-ts-hover-tag": { margin: "4px 0 0" },
+  ".cm-ts-hover-tag-name": { color: c.keyword, fontWeight: "600" },
 });
 
 /** Dark editor theme built from pierre-dark's exact palette. */
