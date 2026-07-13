@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
@@ -366,8 +367,10 @@ function App() {
     [activeTab, saveFile, setTheme, handleOpenFolderDialog],
   );
 
-  // Restore: CLI launch path first, then last opened folder.
+  // Restore the CLI launch path / last folder only in the primary window;
+  // every New Window (label "w-N") starts empty on the Welcome screen.
   useEffect(() => {
+    if (getCurrentWindow().label !== "main") return;
     let cancelled = false;
     getLaunchPath()
       .then((launchPath) => {
