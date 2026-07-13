@@ -8,8 +8,13 @@ entries under a new version heading.
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-07-13
+
 ### Added
-- Editor: **TypeScript intelligence** — semantic completions with **auto-import** (e.g. `useState` before it's imported), `obj.` member completions, real TypeScript error squiggles, and **hover type info** for JS/TS projects — powered by the TypeScript compiler in a background worker, fully offline. Toggle in ⌘, → Editor.
+- Terminal: the toggle now **hides & restores** the terminal instead of closing
+  it — running shells, scrollback, and splits survive across hide/show. Drag the
+  divider to resize it, and dock it at the bottom or the right.
+- Editor: **TypeScript intelligence** — semantic completions with **auto-import** (e.g. `useState` before it's imported), `obj.` member completions, real TypeScript error squiggles, **hover type info** in a rich Zed-style card (highlighted signature + JSDoc), and **go-to-definition** (⌘-click a symbol, with a ⌘-hover underline) for JS/TS projects — powered by the TypeScript compiler in a background worker, fully offline. Toggle in ⌘, → Editor.
 - Editor: **Prettier formatting** — format the active file via ⇧⌥F, *Edit → Format Document*, or the
   command-center "Format Document" entry. Supported types: JS/JSX/MJS/CJS (Babel), TS/TSX/MTS/CTS
   (TypeScript), JSON/JSONC/JSON5, CSS/SCSS/LESS, HTML, Markdown, YAML. The ⇧⌥F path preserves the
