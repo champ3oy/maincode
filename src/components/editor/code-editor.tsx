@@ -149,6 +149,7 @@ export function CodeEditor({
   // state carries the font compartment value from when it was created).
   useEffect(() => {
     const view = viewRef.current;
+    console.log("[maincode-font] apply size:", fontSize, "view?", !!view);
     if (!view) return;
     view.dispatch({
       effects: fontCompartment.current.reconfigure(fontTheme(fontSize)),
