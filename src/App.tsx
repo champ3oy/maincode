@@ -275,7 +275,6 @@ function App() {
   // Native menu actions (from src-tauri/src/menu.rs via the "menu-action"
   // event). Kept in a latest-ref so the listener subscribes only once.
   const onMenuAction = async (action: string) => {
-    console.log("[maincode-font] menu-action received:", action);
     switch (action) {
       case "new-file":
         if (rootPath) {
