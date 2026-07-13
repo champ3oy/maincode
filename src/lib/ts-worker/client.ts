@@ -41,11 +41,13 @@ class Client implements TsClient {
   private isReady = false;
   private typesListeners = new Set<() => void>();
   private docTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private openSeq = 0;
 
   private ensureWorker() {
     if (this.worker) return;
     this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-    this.worker.addEventListener("error", () => this.closeProject()); // degrade silently
+    const w = this.worker;
+    w.addEventListener("error", () => { if (this.worker === w) this.closeProject(); }); // degrade silently; guard: only close if still current worker
     this.rpc = createRpc(
       this.worker as unknown as import("./protocol").RpcPort,
       () => undefined,
@@ -76,7 +78,9 @@ class Client implements TsClient {
     this.closeProject();
     this.root = root;
     this.ensureWorker();
+    const seq = ++this.openSeq;
     const rel = await listFilesRecursive(root).catch(() => [] as string[]);
+    if (seq !== this.openSeq) return;
     const keep = preloadFilter(rel);
     const sources = await Promise.all(
       keep.map(async (r) => {
@@ -89,19 +93,23 @@ class Client implements TsClient {
         }
       }),
     );
+    if (seq !== this.openSeq) return;
     const tsconfigText =
       (await readFile(`${root}/tsconfig.json`).then((r) => r.content).catch(() => null)) ??
       (await readFile(`${root}/jsconfig.json`).then((r) => r.content).catch(() => null));
+    if (seq !== this.openSeq) return;
     await this.rpc!.request({
       kind: "openProject",
       root,
       files: sources.filter((s): s is { path: string; content: string } => s !== null),
       tsconfigText,
     });
+    if (seq !== this.openSeq) return;
     this.isReady = true;
   }
 
   closeProject(): void {
+    this.openSeq++; // invalidate any in-flight openProject continuations
     this.worker?.terminate();
     this.worker = null;
     this.rpc = null;
