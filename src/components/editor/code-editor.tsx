@@ -2,13 +2,15 @@ import { useEffect, useRef } from "react";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
+import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
 import { basicSetup } from "codemirror";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { pierreDark, searchMatchTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
-import { useEditorFont } from "@/hooks/use-editor-font";
+import { useSettings } from "@/hooks/use-settings";
+import { FONT_STACKS } from "@/hooks/use-diff-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { FindWidget } from "./find-widget";
 
@@ -25,10 +27,13 @@ function themeExtensions(dark: boolean) {
   return dark ? pierreDark() : [lightBackground];
 }
 
-// Editor font size lives on the `.cm-editor` root so it cascades to content and
-// gutters. Reconfigured live via a Compartment when the size changes.
-function fontTheme(size: number) {
-  return EditorView.theme({ "&": { fontSize: `${size}px` } });
+// Editor font size + family live on the `.cm-editor` root so they cascade to
+// content and gutters. Reconfigured live via a Compartment when either changes.
+function fontTheme(size: number, family: string) {
+  return EditorView.theme({
+    "&": { fontSize: `${size}px` },
+    ".cm-scroller": { fontFamily: family },
+  });
 }
 
 interface CodeEditorProps {
@@ -54,6 +59,9 @@ export function CodeEditor({
   const themeCompartment = useRef(new Compartment());
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
+  const { settings } = useSettings();
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap } = settings.editor;
+  const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -64,10 +72,19 @@ export function CodeEditor({
   const darkRef = useRef(resolvedTheme === "dark");
   darkRef.current = resolvedTheme === "dark";
 
-  const { fontSize } = useEditorFont();
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
+  const fontFamilyRef = useRef(fontFamily);
+  fontFamilyRef.current = fontFamily;
   const fontCompartment = useRef(new Compartment());
+
+  const tabSizeRef = useRef(tabSize);
+  tabSizeRef.current = tabSize;
+  const tabCompartment = useRef(new Compartment());
+
+  const wordWrapRef = useRef(wordWrap);
+  wordWrapRef.current = wordWrap;
+  const wrapCompartment = useRef(new Compartment());
 
   // Search state + handlers from the hook.
   const [searchState, searchHandlers] = useEditorSearch(viewRef);
@@ -127,7 +144,12 @@ export function CodeEditor({
           cmLanguageFor(languageKeyForPath(docPath)),
         ),
         themeCompartment.current.of(themeExtensions(darkRef.current)),
-        fontCompartment.current.of(fontTheme(fontSizeRef.current)),
+        fontCompartment.current.of(fontTheme(fontSizeRef.current, fontFamilyRef.current)),
+        tabCompartment.current.of([
+          EditorState.tabSize.of(tabSizeRef.current),
+          indentUnit.of(" ".repeat(tabSizeRef.current)),
+        ]),
+        wrapCompartment.current.of(wordWrapRef.current ? EditorView.lineWrapping : []),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(
@@ -192,15 +214,38 @@ export function CodeEditor({
     });
   }, [resolvedTheme, path]);
 
-  // Apply the editor font size live, and re-apply after tab swaps (a cached
-  // state carries the font compartment value from when it was created).
+  // Apply the editor font size + family live, and re-apply after tab swaps (a
+  // cached state carries the font compartment value from when it was created).
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: fontCompartment.current.reconfigure(fontTheme(fontSize)),
+      effects: fontCompartment.current.reconfigure(fontTheme(fontSize, fontFamily)),
     });
-  }, [fontSize, path]);
+  }, [fontSize, fontFamily, path]);
+
+  // Apply tab size + indent unit live.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: tabCompartment.current.reconfigure([
+        EditorState.tabSize.of(tabSize),
+        indentUnit.of(" ".repeat(tabSize)),
+      ]),
+    });
+  }, [tabSize, path]);
+
+  // Apply word wrap live.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: wrapCompartment.current.reconfigure(
+        wordWrap ? EditorView.lineWrapping : [],
+      ),
+    });
+  }, [wordWrap, path]);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">

@@ -24,7 +24,7 @@ import { Welcome } from "@/components/welcome/welcome";
 import { useRepoStatus } from "@/hooks/use-repo-status";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { readLastFolder, useWorkspace } from "@/hooks/use-workspace";
-import { useEditorFont } from "@/hooks/use-editor-font";
+import { useSettings } from "@/hooks/use-settings";
 import {
   getLaunchPath,
   getRepoBranch,
@@ -71,12 +71,27 @@ function App() {
     isDirty,
   } = useEditor();
   const { addRecent, recent } = useRecentRepos();
-  const {
-    increase: fontIncrease,
-    decrease: fontDecrease,
-    reset: fontReset,
-  } = useEditorFont();
+  const { settings, patch } = useSettings();
   const { setTheme } = useTheme();
+
+  // Bridge: whenever settings.theme changes, apply it to next-themes.
+  useEffect(() => {
+    setTheme(settings.theme);
+  }, [settings.theme, setTheme]);
+
+  function clampFontSize(size: number): number {
+    return Math.min(32, Math.max(8, Math.round(size)));
+  }
+
+  function fontIncrease() {
+    patch({ editor: { fontSize: clampFontSize(settings.editor.fontSize + 1) } });
+  }
+  function fontDecrease() {
+    patch({ editor: { fontSize: clampFontSize(settings.editor.fontSize - 1) } });
+  }
+  function fontReset() {
+    patch({ editor: { fontSize: 13 } });
+  }
   const [gitAvailable, setGitAvailable] = useState(false);
   const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
@@ -371,13 +386,13 @@ function App() {
       {
         id: "theme-light",
         label: "Theme: Light",
-        run: () => setTheme("light"),
+        run: () => patch({ theme: "light" }),
       },
-      { id: "theme-dark", label: "Theme: Dark", run: () => setTheme("dark") },
+      { id: "theme-dark", label: "Theme: Dark", run: () => patch({ theme: "dark" }) },
       {
         id: "theme-system",
         label: "Theme: System",
-        run: () => setTheme("system"),
+        run: () => patch({ theme: "system" }),
       },
       {
         id: "toggle-terminal",
@@ -385,7 +400,7 @@ function App() {
         run: () => setShowTerminal((v) => !v),
       },
     ],
-    [activeTab, saveFile, setTheme, handleOpenFolderDialog],
+    [activeTab, saveFile, patch, handleOpenFolderDialog],
   );
 
   // Restore the CLI launch path / last folder only in the primary window;

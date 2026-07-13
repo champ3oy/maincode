@@ -20,7 +20,7 @@ export const FONT_LABELS: Record<FontChoice, string> = {
   courier: "Courier",
 };
 
-const FONT_STACKS: Record<FontChoice, string> = {
+export const FONT_STACKS: Record<FontChoice, string> = {
   "app-mono": "'App Mono', ui-monospace, monospace",
   "system-mono":
     "ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
