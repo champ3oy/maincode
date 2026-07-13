@@ -1,13 +1,16 @@
 import { useEffect, useRef } from "react";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
+import { search } from "@codemirror/search";
 import { basicSetup } from "codemirror";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
-import { pierreDark, searchPanelTheme } from "@/lib/cm-theme";
+import { pierreDark, searchMatchTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 import { useEditorFont } from "@/hooks/use-editor-font";
+import { useEditorSearch } from "@/hooks/use-editor-search";
+import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
 // transparent so it blends with the app background.
@@ -66,12 +69,50 @@ export function CodeEditor({
   fontSizeRef.current = fontSize;
   const fontCompartment = useRef(new Compartment());
 
+  // Search state + handlers from the hook.
+  const [searchState, searchHandlers] = useEditorSearch(viewRef);
+
+  // Stable ref so the keymap closure can call the latest handlers without
+  // capturing a stale version.
+  const searchHandlersRef = useRef(searchHandlers);
+  searchHandlersRef.current = searchHandlers;
+
   const makeStateRef = useRef((docPath: string, doc: string): EditorState => {
     return EditorState.create({
       doc,
       extensions: [
+        // Override Mod-f / Mod-Alt-f BEFORE basicSetup so our handler wins and
+        // CodeMirror's built-in docked panel never opens.
+        Prec.highest(
+          keymap.of([
+            {
+              key: "Mod-f",
+              run: (view) => {
+                const sel = view.state.sliceDoc(
+                  view.state.selection.main.from,
+                  view.state.selection.main.to,
+                );
+                searchHandlersRef.current.openFind(sel || undefined);
+                return true;
+              },
+            },
+            {
+              key: "Mod-Alt-f",
+              run: (view) => {
+                const sel = view.state.sliceDoc(
+                  view.state.selection.main.from,
+                  view.state.selection.main.to,
+                );
+                searchHandlersRef.current.openReplace(sel || undefined);
+                return true;
+              },
+            },
+          ]),
+        ),
         basicSetup,
-        searchPanelTheme,
+        // Required: initialises the search state so setSearchQuery has effect.
+        search({ top: true }),
+        searchMatchTheme,
         keymap.of([
           {
             key: "Mod-s",
@@ -93,11 +134,17 @@ export function CodeEditor({
               pathRef.current,
               update.state.doc.toString(),
             );
+            // Keep match count fresh when the document changes.
+            searchHandlersRef.current.onEditorUpdate();
           }
           if (update.selectionSet || update.docChanged) {
             const head = update.state.selection.main.head;
             const line = update.state.doc.lineAt(head);
             onCursorRef.current?.(line.number, head - line.from + 1);
+            // Keep current-match index in sync when the cursor moves.
+            if (update.selectionSet) {
+              searchHandlersRef.current.onEditorUpdate();
+            }
           }
         }),
       ],
@@ -156,6 +203,31 @@ export function CodeEditor({
   }, [fontSize, path]);
 
   return (
-    <div ref={hostRef} className="h-full min-h-0 overflow-hidden bg-background" />
+    <div className="relative h-full min-h-0 overflow-hidden bg-background">
+      <div ref={hostRef} className="h-full min-h-0 overflow-hidden" />
+      <FindWidget
+        open={searchState.open}
+        showReplace={searchState.showReplace}
+        query={searchState.query}
+        replace={searchState.replace}
+        caseSensitive={searchState.caseSensitive}
+        wholeWord={searchState.wholeWord}
+        regexp={searchState.regexp}
+        matchCurrent={searchState.matchCount.current}
+        matchTotal={searchState.matchCount.total}
+        matchCapped={searchState.matchCount.capped}
+        setQuery={searchHandlers.setQuery}
+        setReplace={searchHandlers.setReplace}
+        toggleCase={searchHandlers.toggleCase}
+        toggleWord={searchHandlers.toggleWord}
+        toggleRegexp={searchHandlers.toggleRegexp}
+        toggleReplace={searchHandlers.toggleReplace}
+        next={searchHandlers.next}
+        prev={searchHandlers.prev}
+        replaceOne={searchHandlers.replaceOne}
+        replaceAllMatches={searchHandlers.replaceAllMatches}
+        close={searchHandlers.close}
+      />
+    </div>
   );
 }
