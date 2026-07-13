@@ -257,6 +257,18 @@ export function SettingsView({ onEditJson }: SettingsViewProps) {
           />
         ),
       },
+      {
+        id: "editor-format-on-save",
+        label: "Format on Save",
+        description: "Run Prettier before saving (⌘S).",
+        category: "Editor",
+        control: (
+          <Toggle
+            value={settings.editor.formatOnSave}
+            onChange={(formatOnSave) => patch({ editor: { formatOnSave } })}
+          />
+        ),
+      },
       // Terminal
       {
         id: "terminal-font-size",

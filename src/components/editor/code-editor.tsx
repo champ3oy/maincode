@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
@@ -11,6 +12,7 @@ import { pierreDark, searchMatchTheme, tooltipTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
+import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
 import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -42,6 +44,8 @@ interface CodeEditorProps {
   onChange: (path: string, content: string) => void;
   onSave: (path: string) => void;
   onCursor?: (line: number, col: number) => void;
+  /** Optional project root used to resolve .prettierrc config. */
+  formatRoot?: string | null;
 }
 
 export function CodeEditor({
@@ -50,11 +54,14 @@ export function CodeEditor({
   onChange,
   onSave,
   onCursor,
+  formatRoot,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const statesRef = useRef(new Map<string, EditorState>());
   const pathRef = useRef(path);
+  const formatRootRef = useRef(formatRoot ?? null);
+  formatRootRef.current = formatRoot ?? null;
   const themeCompartment = useRef(new Compartment());
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
@@ -144,6 +151,26 @@ export function CodeEditor({
             key: "Mod-s",
             run: () => {
               onSaveRef.current(pathRef.current);
+              return true;
+            },
+          },
+          {
+            key: "Alt-Shift-f",
+            run: (view) => {
+              void (async () => {
+                const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
+                const supported = await formatWithCursorInView(view, pathRef.current, config).catch(
+                  (err: unknown) => {
+                    toast.error(
+                      `Format failed: ${err instanceof Error ? err.message : String(err)}`,
+                    );
+                    return true; // error already toasted
+                  },
+                );
+                if (!supported) {
+                  toast.info("No formatter for this file type");
+                }
+              })();
               return true;
             },
           },

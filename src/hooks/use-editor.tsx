@@ -9,9 +9,11 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { readFile, writeFile } from "@/lib/fs";
+import { useSettings } from "@/hooks/use-settings";
 import { isImagePath } from "@/lib/image";
 import { isSettingsPath, SETTINGS_PATH } from "@/lib/settings";
 import { basename } from "@/hooks/use-workspace";
+import { formatContent, resolvePrettierConfig } from "@/lib/format";
 import {
   initialTabsState,
   isDirty,
@@ -27,10 +29,13 @@ interface EditorContextValue {
   openFile: (path: string) => Promise<void>;
   editFile: (path: string, content: string) => void;
   saveFile: (path: string) => Promise<void>;
+  formatFile: (path: string) => Promise<void>;
   closeTab: (path: string) => void;
   activateTab: (path: string) => void;
   handlePathRenamed: (from: string, to: string) => void;
   isDirty: (tab: EditorTab) => boolean;
+  /** Set the project root so formatFile can resolve .prettierrc config. */
+  setFormatRoot: (root: string | null) => void;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -39,6 +44,13 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(tabsReducer, initialTabsState);
   const stateRef = useRef<TabsState>(state);
   stateRef.current = state;
+
+  // rootPath for .prettierrc config resolution; set from App via setFormatRoot.
+  const formatRootRef = useRef<string | null>(null);
+
+  const { settings } = useSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
 
   const openFile = useCallback(async (path: string) => {
     // Already open → activate it without touching content.
@@ -81,6 +93,29 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "edit", path, content });
   }, []);
 
+  const formatFile = useCallback(async (path: string) => {
+    // Guards: settings and image tabs have no meaningful text content.
+    if (isSettingsPath(path)) return;
+    if (isImagePath(path)) return;
+    const tab = stateRef.current.tabs.find((t) => t.path === path);
+    if (!tab) return;
+    const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
+    let formatted: string | null;
+    try {
+      formatted = await formatContent(tab.content, path, config);
+    } catch (err) {
+      toast.error(`Format failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (formatted === null) {
+      toast.info("No formatter for this file type");
+      return;
+    }
+    if (formatted !== tab.content) {
+      dispatch({ type: "edit", path, content: formatted });
+    }
+  }, []);
+
   const saveFile = useCallback(async (path: string) => {
     // CRITICAL: settings and image tabs hold empty content — writing would destroy files.
     if (isSettingsPath(path)) return;
@@ -88,11 +123,33 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     const tab = stateRef.current.tabs.find((t) => t.path === path);
     if (!tab) return;
     try {
-      await writeFile(path, tab.content);
+      let content = tab.content;
+      // Format-on-save: format content first, then write once.
+      if (settingsRef.current.editor.formatOnSave) {
+        const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
+        try {
+          const formatted = await formatContent(content, path, config);
+          if (formatted !== null) {
+            content = formatted;
+            // Update editor state so UI reflects the formatted content.
+            if (formatted !== tab.content) {
+              dispatch({ type: "edit", path, content: formatted });
+            }
+          }
+        } catch (err) {
+          // Format error on save: warn but still save the original content.
+          toast.error(`Format failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      await writeFile(path, content);
       dispatch({ type: "markSaved", path });
     } catch (e) {
       toast.error(`Save failed: ${e}`);
     }
+  }, []);
+
+  const setFormatRoot = useCallback((root: string | null) => {
+    formatRootRef.current = root;
   }, []);
 
   const closeTab = useCallback((path: string) => {
@@ -117,19 +174,23 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       openFile,
       editFile,
       saveFile,
+      formatFile,
       closeTab,
       activateTab,
       handlePathRenamed,
       isDirty,
+      setFormatRoot,
     };
   }, [
     state,
     openFile,
     editFile,
     saveFile,
+    formatFile,
     closeTab,
     activateTab,
     handlePathRenamed,
+    setFormatRoot,
   ]);
 
   return (

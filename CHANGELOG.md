@@ -9,6 +9,16 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- Editor: **Prettier formatting** — format the active file via ⇧⌥F, *Edit → Format Document*, or the
+  command-center "Format Document" entry. Supported types: JS/JSX/MJS/CJS (Babel), TS/TSX/MTS/CTS
+  (TypeScript), JSON/JSONC/JSON5, CSS/SCSS/LESS, HTML, Markdown, YAML. The ⇧⌥F path preserves the
+  cursor position (single undo step); menu/palette paths apply the format as an editor change so
+  undo works. Project-level config is picked up from `.prettierrc`, `.prettierrc.json`, or
+  `package.json#prettier` (JSON-based only; JS/YAML config files are not read). Unsupported file
+  types show a friendly info toast; syntax errors show a readable error toast. All Prettier modules
+  are lazy-loaded on first use so the main bundle size is not affected.
+- Settings: **Format on Save** toggle (Settings → Editor → "Format on Save") — runs Prettier
+  before every ⌘S write; formatted content is written in a single file operation.
 - Editor: **autocomplete + linting** — language completions (JS snippets, HTML tags, etc.) plus
   document-word fallback (`completeAnyWord`) appear as you type; ⌃Space triggers manually.
   Syntax-error squiggles (Lezer parse tree) and a gutter marker appear for all languages; JSON

@@ -60,6 +60,9 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&close_folder)
         .build()?;
 
+    let format_document = MenuItemBuilder::with_id("format-document", "Format Document")
+        .accelerator("Alt+Shift+F")
+        .build(app)?;
     let edit_menu = SubmenuBuilder::new(app, "Edit")
         .undo()
         .redo()
@@ -68,6 +71,8 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .copy()
         .paste()
         .select_all()
+        .separator()
+        .item(&format_document)
         .build()?;
 
     let command_palette = MenuItemBuilder::with_id("command-palette", "Command Palette…")

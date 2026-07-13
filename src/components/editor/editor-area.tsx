@@ -10,9 +10,10 @@ import { TabBar } from "./tab-bar";
 
 interface EditorAreaProps {
   onCursor?: (line: number, col: number) => void;
+  formatRoot?: string | null;
 }
 
-export function EditorArea({ onCursor }: EditorAreaProps) {
+export function EditorArea({ onCursor, formatRoot }: EditorAreaProps) {
   const {
     tabs,
     activeTab,
@@ -81,6 +82,7 @@ export function EditorArea({ onCursor }: EditorAreaProps) {
               onChange={editFile}
               onSave={(path) => void saveFile(path)}
               onCursor={onCursor}
+              formatRoot={formatRoot}
             />
           )}
         </div>
