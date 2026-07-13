@@ -233,6 +233,30 @@ export function SettingsView({ onEditJson }: SettingsViewProps) {
           />
         ),
       },
+      {
+        id: "editor-autocomplete",
+        label: "Autocomplete",
+        description: "Suggest completions as you type.",
+        category: "Editor",
+        control: (
+          <Toggle
+            value={settings.editor.autocomplete}
+            onChange={(autocomplete) => patch({ editor: { autocomplete } })}
+          />
+        ),
+      },
+      {
+        id: "editor-linting",
+        label: "Linting",
+        description: "Underline syntax errors in the editor.",
+        category: "Editor",
+        control: (
+          <Toggle
+            value={settings.editor.linting}
+            onChange={(linting) => patch({ editor: { linting } })}
+          />
+        ),
+      },
       // Terminal
       {
         id: "terminal-font-size",

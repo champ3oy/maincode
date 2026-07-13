@@ -4,9 +4,9 @@ import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
-import { basicSetup } from "codemirror";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
+import { baseSetup, completionExtensions, lintExtensions } from "@/lib/cm-setup";
 import { pierreDark, searchMatchTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
@@ -59,7 +59,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -85,6 +85,15 @@ export function CodeEditor({
   wordWrapRef.current = wordWrap;
   const wrapCompartment = useRef(new Compartment());
 
+  // Autocomplete + lint compartments and refs.
+  const autocompleteRef = useRef(autocomplete);
+  autocompleteRef.current = autocomplete;
+  const completionCompartment = useRef(new Compartment());
+
+  const lintingRef = useRef(linting);
+  lintingRef.current = linting;
+  const lintCompartment = useRef(new Compartment());
+
   // Search state + handlers from the hook.
   const [searchState, searchHandlers] = useEditorSearch(viewRef);
 
@@ -97,7 +106,7 @@ export function CodeEditor({
     return EditorState.create({
       doc,
       extensions: [
-        // Override Mod-f / Mod-Alt-f BEFORE basicSetup so our handler wins and
+        // Override Mod-f / Mod-Alt-f BEFORE baseSetup so our handler wins and
         // CodeMirror's built-in docked panel never opens.
         Prec.highest(
           keymap.of([
@@ -125,7 +134,7 @@ export function CodeEditor({
             },
           ]),
         ),
-        basicSetup,
+        baseSetup,
         // Required: initialises the search state so setSearchQuery has effect.
         search({ top: true }),
         searchMatchTheme,
@@ -149,6 +158,12 @@ export function CodeEditor({
           indentUnit.of(" ".repeat(tabSizeRef.current)),
         ]),
         wrapCompartment.current.of(wordWrapRef.current ? EditorView.lineWrapping : []),
+        completionCompartment.current.of(
+          completionExtensions(autocompleteRef.current),
+        ),
+        lintCompartment.current.of(
+          lintExtensions(lintingRef.current, languageKeyForPath(docPath)),
+        ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(
@@ -245,6 +260,30 @@ export function CodeEditor({
       ),
     });
   }, [wordWrap, path]);
+
+  // Apply autocomplete live; path dep ensures JSON-specific linter is correct
+  // after tab swaps (lint compartment depends on languageKey for JSON linter).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: completionCompartment.current.reconfigure(
+        completionExtensions(autocomplete),
+      ),
+    });
+  }, [autocomplete, path]);
+
+  // Apply linting live; path dep recomputes languageKey so JSON docs get the
+  // JSON linter after tab swaps.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: lintCompartment.current.reconfigure(
+        lintExtensions(linting, languageKeyForPath(path)),
+      ),
+    });
+  }, [linting, path]);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">

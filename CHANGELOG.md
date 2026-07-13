@@ -9,6 +9,12 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- Editor: **autocomplete + linting** — language completions (JS snippets, HTML tags, etc.) plus
+  document-word fallback (`completeAnyWord`) appear as you type; ⌃Space triggers manually.
+  Syntax-error squiggles (Lezer parse tree) and a gutter marker appear for all languages; JSON
+  files additionally get precise `jsonParseLinter()` diagnostics. Both features are toggleable
+  independently in Settings → Editor ("Autocomplete" and "Linting"). No new dependencies — all
+  from installed `@codemirror/*` packages.
 - **Settings page** — ⌘, (or *Maincode → Settings…* / command-center "Open Settings") opens
   a Zed-style settings tab in the editor. Three categories: Appearance (theme), Editor (font
   size, font family, tab size, word wrap), and Terminal (font size). Changes apply live and
