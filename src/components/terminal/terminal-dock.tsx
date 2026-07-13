@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   IconLayoutBottombar,
   IconLayoutSidebarRight,
@@ -11,6 +11,13 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { TerminalPanel } from "./terminal-panel";
+import {
+  getSplitIds,
+  setSplitIds,
+  allocSplitId,
+  syncNextId,
+  disposeSession,
+} from "./terminal-sessions";
 
 export type TerminalPosition = "bottom" | "right";
 
@@ -33,18 +40,29 @@ export function TerminalDock({
   onTogglePosition,
   onEmpty,
 }: TerminalDockProps) {
-  const nextId = useRef(1);
-  const [terminals, setTerminals] = useState<number[]>([0]);
+  // Initialize from the persistent store so a hide/show cycle restores the same
+  // split layout, and keep the store in sync as terminals are added/closed.
+  const [terminals, setTerminals] = useState<number[]>(() => getSplitIds());
+  useEffect(() => {
+    syncNextId();
+  }, []);
+  useEffect(() => {
+    setSplitIds(terminals);
+  }, [terminals]);
 
   const addTerminal = useCallback(() => {
-    setTerminals((prev) => [...prev, nextId.current++]);
+    setTerminals((prev) => [...prev, allocSplitId()]);
   }, []);
 
   const closeTerminal = useCallback(
     (id: number) => {
+      disposeSession(id); // destroy this terminal's pty + xterm
       setTerminals((prev) => {
         const next = prev.filter((t) => t !== id);
-        if (next.length === 0) onEmpty();
+        if (next.length === 0) {
+          setSplitIds([0]); // reset for the next open
+          onEmpty();
+        }
         return next;
       });
     },
@@ -104,7 +122,7 @@ export function TerminalDock({
                 >
                   <IconX className="size-3.5" />
                 </button>
-                <TerminalPanel cwd={cwd} />
+                <TerminalPanel id={id} cwd={cwd} />
               </ResizablePanel>
             </Fragment>
           ))}
