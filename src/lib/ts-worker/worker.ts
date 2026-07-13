@@ -21,6 +21,16 @@ const missing = new Set<string>(); // confirmed absent
 const pending = new Set<string>(); // asked for, awaiting filesLoaded
 let wanted = new Set<string>(); // misses gathered during the current call
 let projectVersion = 0;
+// When node_modules content arrives after a lint has already cached a FAILED module
+// resolution (e.g. a package.json whose exports/types map wasn't in the VFS yet),
+// bumping projectVersion alone won't make TS re-resolve — it reuses per-file cached
+// resolutions unless the importing file's version changed OR the host reports its
+// resolutions invalidated. We flip this flag on content-changing filesLoaded so
+// host.hasInvalidatedResolutions() forces a fresh module resolution on the next
+// program build, then clear it once that build has run. This is the crash-free
+// alternative to cleanupSemanticCache() (which throws inside TS's document registry
+// once the VFS churns thousands of node_modules files).
+let resolutionsInvalidated = false;
 let root = "";
 let options: ts.CompilerOptions = {};
 let service: ts.LanguageService | null = null;
@@ -36,7 +46,10 @@ function want(path: string) {
 }
 
 // ---- host ------------------------------------------------------------------
-const host: ts.LanguageServiceHost = {
+// `hasInvalidatedResolutions` isn't on the public LanguageServiceHost type (it lives
+// on CompilerHost/ProgramHost), but the LanguageService reads it at runtime to decide
+// whether to re-run module resolution. Widen the type so we can supply it legally.
+const host: ts.LanguageServiceHost & Pick<ts.CompilerHost, "hasInvalidatedResolutions"> = {
   getScriptFileNames: () =>
     [...files.keys()].filter((p) => scriptKindForPath(p) !== "other" || p.endsWith(".d.ts")),
   getScriptVersion: (p) => String(files.get(p)?.version ?? 0),
@@ -67,10 +80,20 @@ const host: ts.LanguageServiceHost = {
   getCompilationSettings: () => options,
   getDefaultLibFileName: (o) => `${LIB_DIR}/${ts.getDefaultLibFileName(o)}`,
   getProjectVersion: () => String(projectVersion),
+  // Force TS to re-run module resolution for every file after node_modules content
+  // arrives asynchronously. Returning true here (paired with a projectVersion bump)
+  // makes the next program build discard the cached "Cannot find module" for
+  // exports-map packages and re-resolve against the now-larger VFS.
+  hasInvalidatedResolutions: () => resolutionsInvalidated,
 };
 
 // ---- miss flushing ----------------------------------------------------------
 function flushWanted() {
+  // Every service query (diagnostics/completions/hover) calls flushWanted on its way
+  // out, AFTER TS has built its program and consumed host.hasInvalidatedResolutions.
+  // Clear the flag here so the invalidation applies to exactly one rebuild — leaving
+  // it set would keep forcing full re-resolution on every subsequent query forever.
+  resolutionsInvalidated = false;
   if (wanted.size === 0) return;
   // Every concrete path TS probed under node_modules (including the package.json /
   // index.d.ts manifests it generates while resolving a bare specifier) has already
@@ -101,7 +124,15 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         }),
       );
       for (const f of req.files) setFile(f.path, f.content);
-      service = ts.createLanguageService(host);
+      // Give this LanguageService its OWN document registry rather than the global
+      // shared one that createLanguageService(host) defaults to. cleanupSemanticCache()
+      // walks the current program's source files and calls releaseDocumentWithKey on
+      // each; with the shared registry, entries created under a different bucket/key
+      // (or already released) come back undefined and TS crashes reading `.sourceFile`
+      // (isDocumentRegistryEntry). This bites once the VFS grows to thousands of churn-
+      // ing node_modules files — exactly the real-project case. A private registry keeps
+      // every entry consistent with this service, so cleanup is safe.
+      service = ts.createLanguageService(host, ts.createDocumentRegistry());
       return true;
     }
     case "docChanged": {
@@ -171,38 +202,54 @@ async function handle(req: WorkerRequest): Promise<unknown> {
     }
     case "filesLoaded": {
       let changed = false;
+      const arrivedManifestDirs: string[] = [];
       for (const f of req.files as FileEntry[]) {
         pending.delete(f.path);
         if (f.content === null) missing.add(f.path);
         else {
           setFile(f.path, f.content);
           changed = true;
+          // A newly-arrived package.json can change how paths WITHIN its package
+          // resolve (its "exports"/"types" map points at files TS never probed and
+          // may have recorded absent). Remember the package dir so we can re-open
+          // just those paths for re-probing — see the scoped invalidation below.
+          if (f.path.endsWith("/package.json")) {
+            arrivedManifestDirs.push(f.path.slice(0, -"/package.json".length));
+          }
         }
       }
       if (changed) {
-        // Retry resolutions TS has already cached as failed. When a bare
-        // specifier resolves through a package's package.json "exports"/"types"
-        // map, TS must read that package.json AT resolution time. On the first
-        // lint the manifest isn't in the VFS yet (readFile returns undefined and
-        // is only recorded as a want), so TS can't parse the exports map, falls
-        // back to legacy resolution — which fails for exports-only packages like
-        // react-router-dom — and CACHES that failure. When the manifest later
-        // arrives here, the LanguageService reuses its cached program and module
-        // resolutions (the package.json is not a script file, so no script
-        // version changes to force re-resolution) and never retries, leaving a
-        // permanent "Cannot find module" even though the package is present.
-        // getProjectVersion bumps alone do NOT invalidate that failed-lookup
-        // cache. cleanupSemanticCache() drops the cached programs/resolutions so
-        // the next lint re-resolves fresh against the now-larger VFS; clearing
-        // `missing` lets any path previously recorded absent (including a real
-        // file that briefly came back content:null — over the 2 MB read cap,
-        // binary, or a transient read rejection) be re-probed. This
-        // self-terminates: `files` only grows, so eventually a round loads
-        // nothing new (`changed` stays false), `missing` sticks, and the loop
-        // converges.
-        missing.clear();
+        // Retry resolutions TS has already cached as failed. When a bare specifier
+        // resolves through a package's package.json "exports"/"types" map, TS must
+        // read that package.json AT resolution time. On the first lint the manifest
+        // isn't in the VFS yet (readFile returns undefined, path only recorded as a
+        // want), so TS can't parse the exports map, falls back to legacy resolution
+        // — which fails for exports-only packages like react-router-dom — and CACHES
+        // that failure. When the manifest later arrives, the LanguageService reuses
+        // its cached program and module resolutions (the package.json is not a script
+        // file, so no script version changes to force re-resolution) and never
+        // retries, leaving a permanent "Cannot find module".
+        //
+        // Two things force the retry, both crash-free:
+        //  (1) SCOPED `missing` invalidation: only re-open absent paths UNDER the dir
+        //      of an arrived package.json — exactly the paths whose resolution the new
+        //      exports/types map can change. Round 1 cleared ALL of `missing`, which on
+        //      a real project (huge surface of genuinely-absent probes: wrong-extension
+        //      candidates, dist/ and .vite/ ghost dirs, non-existent @types twins) re-
+        //      opened everything every round, so `needFiles` never reached 0 and the
+        //      loop never converged. Scoping keeps unrelated absences sticky, so `files`
+        //      only grows, a round eventually loads nothing new, and needFiles → 0.
+        //  (2) resolutionsInvalidated flag: read by host.hasInvalidatedResolutions so
+        //      the next program build re-resolves modules instead of reusing the cached
+        //      failure. This replaces round 1's cleanupSemanticCache(), which crashes
+        //      inside TS's document registry (releaseDocumentWithKey → undefined
+        //      `.sourceFile`) once the VFS churns thousands of node_modules files.
+        for (const dir of arrivedManifestDirs) {
+          const prefix = dir + "/";
+          for (const p of [...missing]) if (p.startsWith(prefix)) missing.delete(p);
+        }
         projectVersion++;
-        service?.cleanupSemanticCache();
+        resolutionsInvalidated = true;
         rpc.notify({ kind: "typesUpdated" });
       }
       return true;
