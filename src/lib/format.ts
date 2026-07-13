@@ -14,9 +14,26 @@ import { readFile } from "@/lib/fs";
 type AnyModule = any;
 const moduleCache = new Map<string, AnyModule>();
 
-async function loadModule(specifier: string): Promise<AnyModule> {
+// Literal import() specifiers so Vite code-splits each module into its own
+// lazily-fetched chunk. (A variable specifier with @vite-ignore would skip
+// bundling entirely and fail at runtime — webviews can't resolve bare
+// specifiers.)
+const loaders = {
+  "prettier/standalone": () => import("prettier/standalone"),
+  "prettier/plugins/babel": () => import("prettier/plugins/babel"),
+  "prettier/plugins/estree": () => import("prettier/plugins/estree"),
+  "prettier/plugins/typescript": () => import("prettier/plugins/typescript"),
+  "prettier/plugins/postcss": () => import("prettier/plugins/postcss"),
+  "prettier/plugins/html": () => import("prettier/plugins/html"),
+  "prettier/plugins/markdown": () => import("prettier/plugins/markdown"),
+  "prettier/plugins/yaml": () => import("prettier/plugins/yaml"),
+} as const;
+
+type ModuleSpecifier = keyof typeof loaders;
+
+async function loadModule(specifier: ModuleSpecifier): Promise<AnyModule> {
   if (moduleCache.has(specifier)) return moduleCache.get(specifier);
-  const mod = await import(/* @vite-ignore */ specifier);
+  const mod = await loaders[specifier]();
   moduleCache.set(specifier, mod);
   return mod;
 }
@@ -25,11 +42,9 @@ async function loadModule(specifier: string): Promise<AnyModule> {
 // Parser inference
 // ---------------------------------------------------------------------------
 
-type PluginSpec = string[];
-
 interface ParserResult {
   parser: string;
-  plugins: PluginSpec;
+  plugins: ModuleSpecifier[];
 }
 
 export function inferParser(filePath: string): ParserResult | null {
