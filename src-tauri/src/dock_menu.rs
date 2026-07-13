@@ -95,6 +95,18 @@ impl DockMenuTarget {
     }
 }
 
+/// Sort key for window labels so the Dock list reads `main`, `w-1`, `w-2`, …,
+/// `w-10` numerically — a plain string sort would order `w-10` before `w-2`.
+fn window_sort_key(label: &str) -> (u8, u64) {
+    if label == "main" {
+        (0, 0)
+    } else if let Some(n) = label.strip_prefix("w-").and_then(|s| s.parse::<u64>().ok()) {
+        (1, n)
+    } else {
+        (2, 0)
+    }
+}
+
 /// Build the Dock menu that AppKit will display. Called from the injected
 /// `applicationDockMenu:` IMP below (main thread).
 fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
@@ -104,7 +116,8 @@ fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     let empty_key = NSString::from_str("");
     // SAFETY: `newWindowFromDock:` is a valid selector implemented by
     // `DockMenuTarget`. `addItemWithTitle:action:keyEquivalent:` appends the
-    // item and returns it (autoreleased, borrowed here).
+    // item and returns a +1 `Retained`; the menu keeps its own retain, so
+    // dropping ours at end of scope is correct.
     let item = unsafe {
         menu.addItemWithTitle_action_keyEquivalent(&title, Some(sel!(newWindowFromDock:)), &empty_key)
     };
@@ -128,8 +141,8 @@ fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
             .map(|(label, w)| (label.clone(), w.title().unwrap_or_else(|_| label.clone())))
             .collect();
         if !entries.is_empty() {
-            // Stable ordering by Tauri label (main, w-1, w-2, …).
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            // Order by Tauri label: main first, then w-1, w-2, … numerically.
+            entries.sort_by_key(|(label, _)| window_sort_key(label));
 
             let separator = NSMenuItem::separatorItem(mtm);
             menu.addItem(&separator);
@@ -138,7 +151,8 @@ fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
                 let title_ns = NSString::from_str(&title);
                 // SAFETY: `focusWindowFromDock:` is a valid selector implemented
                 // by `DockMenuTarget`. `addItemWithTitle:action:keyEquivalent:`
-                // appends the item and returns it (autoreleased, borrowed here).
+                // appends the item and returns a +1 `Retained`; the menu keeps
+                // its own retain, so dropping ours at end of scope is correct.
                 let win_item = unsafe {
                     menu.addItemWithTitle_action_keyEquivalent(
                         &title_ns,
