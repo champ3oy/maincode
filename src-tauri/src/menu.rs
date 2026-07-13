@@ -12,8 +12,14 @@ fn next_window_label() -> String {
 // to the frontend via the `menu-action` event (see lib.rs `on_menu_event`);
 // predefined items (copy/paste/quit/…) are handled by the OS.
 pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let settings_item = MenuItemBuilder::with_id("open-settings", "Settings…")
+        .accelerator("CmdOrCtrl+,")
+        .build(app)?;
+
     let app_menu = SubmenuBuilder::new(app, "Maincode")
         .about(None)
+        .separator()
+        .item(&settings_item)
         .separator()
         .hide()
         .hide_others()

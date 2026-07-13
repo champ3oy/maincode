@@ -24,7 +24,7 @@ import { Welcome } from "@/components/welcome/welcome";
 import { useRepoStatus } from "@/hooks/use-repo-status";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { readLastFolder, useWorkspace } from "@/hooks/use-workspace";
-import { useEditorFont } from "@/hooks/use-editor-font";
+import { useSettings } from "@/hooks/use-settings";
 import {
   getLaunchPath,
   getRepoBranch,
@@ -38,6 +38,7 @@ import {
   type FileEntry,
 } from "@/lib/tauri";
 import { useEditor } from "@/hooks/use-editor";
+import { SETTINGS_PATH } from "@/lib/settings";
 import { EditorArea } from "@/components/editor/editor-area";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { useDiffs } from "@/hooks/use-diffs";
@@ -71,12 +72,27 @@ function App() {
     isDirty,
   } = useEditor();
   const { addRecent, recent } = useRecentRepos();
-  const {
-    increase: fontIncrease,
-    decrease: fontDecrease,
-    reset: fontReset,
-  } = useEditorFont();
+  const { settings, patch } = useSettings();
   const { setTheme } = useTheme();
+
+  // Bridge: whenever settings.theme changes, apply it to next-themes.
+  useEffect(() => {
+    setTheme(settings.theme);
+  }, [settings.theme, setTheme]);
+
+  function clampFontSize(size: number): number {
+    return Math.min(32, Math.max(8, Math.round(size)));
+  }
+
+  function fontIncrease() {
+    patch({ editor: { fontSize: clampFontSize(settings.editor.fontSize + 1) } });
+  }
+  function fontDecrease() {
+    patch({ editor: { fontSize: clampFontSize(settings.editor.fontSize - 1) } });
+  }
+  function fontReset() {
+    patch({ editor: { fontSize: 13 } });
+  }
   const [gitAvailable, setGitAvailable] = useState(false);
   const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
@@ -325,6 +341,9 @@ function App() {
       case "font-reset":
         fontReset();
         break;
+      case "open-settings":
+        void openFile(SETTINGS_PATH);
+        break;
     }
   };
   const menuActionRef = useRef(onMenuAction);
@@ -371,21 +390,26 @@ function App() {
       {
         id: "theme-light",
         label: "Theme: Light",
-        run: () => setTheme("light"),
+        run: () => patch({ theme: "light" }),
       },
-      { id: "theme-dark", label: "Theme: Dark", run: () => setTheme("dark") },
+      { id: "theme-dark", label: "Theme: Dark", run: () => patch({ theme: "dark" }) },
       {
         id: "theme-system",
         label: "Theme: System",
-        run: () => setTheme("system"),
+        run: () => patch({ theme: "system" }),
       },
       {
         id: "toggle-terminal",
         label: "Toggle Terminal",
         run: () => setShowTerminal((v) => !v),
       },
+      {
+        id: "open-settings",
+        label: "Open Settings",
+        run: () => void openFile(SETTINGS_PATH),
+      },
     ],
-    [activeTab, saveFile, setTheme, handleOpenFolderDialog],
+    [activeTab, saveFile, patch, handleOpenFolderDialog, openFile],
   );
 
   // Restore the CLI launch path / last folder only in the primary window;
@@ -794,6 +818,7 @@ function App() {
               return path;
             }}
             onBranchSwitched={handleBranchSwitched}
+            onOpenSettings={() => void openFile(SETTINGS_PATH)}
           />
         )}
       </div>

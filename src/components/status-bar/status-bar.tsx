@@ -1,44 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { useTheme } from "next-themes";
 import {
   IconCheck,
   IconFolder,
   IconFolderOpen,
   IconGitBranch,
   IconSettings,
-  IconPlus,
-  IconMinus,
 } from "@tabler/icons-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  FONT_LABELS,
-  FONT_SIZE_MAX,
-  FONT_SIZE_MIN,
-  useDiffSettings,
-  type FontChoice,
-} from "@/hooks/use-diff-settings";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import {
   checkoutBranch,
@@ -56,6 +31,7 @@ interface StatusBarProps {
   dirtyCount?: number;
   onOpenRepo: (path: string) => Promise<string>;
   onBranchSwitched: () => void | Promise<void>;
+  onOpenSettings: () => void;
 }
 
 function basename(path: string): string {
@@ -73,40 +49,35 @@ export function StatusBar({
   dirtyCount,
   onOpenRepo,
   onBranchSwitched,
+  onOpenSettings,
 }: StatusBarProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
-
   return (
-    <>
-      <footer className="flex h-7 shrink-0 items-center gap-1 border-t border-border bg-muted/40 px-2 text-xs text-muted-foreground">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          title="Settings"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <IconSettings />
-        </Button>
+    <footer className="flex h-7 shrink-0 items-center gap-1 border-t border-border bg-muted/40 px-2 text-xs text-muted-foreground">
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        title="Settings"
+        onClick={onOpenSettings}
+      >
+        <IconSettings />
+      </Button>
 
-        <div className="flex items-center gap-1">
-          <ProjectSegment workdir={workdir} onOpenRepo={onOpenRepo} />
-          {gitAvailable && (
-            <BranchSegment
-              branch={branch}
-              onBranchSwitched={onBranchSwitched}
-            />
-          )}
-        </div>
+      <div className="flex items-center gap-1">
+        <ProjectSegment workdir={workdir} onOpenRepo={onOpenRepo} />
+        {gitAvailable && (
+          <BranchSegment
+            branch={branch}
+            onBranchSwitched={onBranchSwitched}
+          />
+        )}
+      </div>
 
-        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-          {cursor && <span>Ln {cursor.line}, Col {cursor.col}</span>}
-          {languageLabel && <span>{languageLabel}</span>}
-          {(dirtyCount ?? 0) > 0 && <span>{dirtyCount} unsaved</span>}
-        </span>
-      </footer>
-
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-    </>
+      <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+        {cursor && <span>Ln {cursor.line}, Col {cursor.col}</span>}
+        {languageLabel && <span>{languageLabel}</span>}
+        {(dirtyCount ?? 0) > 0 && <span>{dirtyCount} unsaved</span>}
+      </span>
+    </footer>
   );
 }
 
@@ -323,108 +294,3 @@ function BranchSegment({
   );
 }
 
-function SettingsDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { theme, setTheme } = useTheme();
-  const { settings, setFont, setFontSize, setWrap } = useDiffSettings();
-  const { font, fontSize, wrap } = settings;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>
-            Configure how Maincode looks and behaves.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              Theme
-            </span>
-            <div className="flex gap-1">
-              {(["system", "light", "dark"] as const).map((t) => (
-                <Button
-                  key={t}
-                  variant={theme === t ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setTheme(t)}
-                  className="flex-1 capitalize"
-                >
-                  {t}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              Diff font
-            </span>
-            <Select
-              value={font}
-              onValueChange={(v) => setFont(v as FontChoice)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(FONT_LABELS) as FontChoice[]).map((f) => (
-                  <SelectItem key={f} value={f}>
-                    {FONT_LABELS[f]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              Diff font size
-            </span>
-            <div className="flex h-8 items-center gap-1">
-              <Button
-                variant="outline"
-                size="icon-sm"
-                disabled={fontSize <= FONT_SIZE_MIN}
-                onClick={() => setFontSize(fontSize - 1)}
-              >
-                <IconMinus />
-              </Button>
-              <span className="w-14 text-center text-sm tabular-nums">
-                {fontSize}px
-              </span>
-              <Button
-                variant="outline"
-                size="icon-sm"
-                disabled={fontSize >= FONT_SIZE_MAX}
-                onClick={() => setFontSize(fontSize + 1)}
-              >
-                <IconPlus />
-              </Button>
-            </div>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              Line wrapping
-            </span>
-            <div className="flex h-8 items-center gap-2">
-              <Switch
-                checked={wrap}
-                onCheckedChange={setWrap}
-                size="sm"
-              />
-              <span className="text-sm text-muted-foreground">
-                {wrap ? "Wrap long lines" : "Scroll horizontally"}
-              </span>
-            </div>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}

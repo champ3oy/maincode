@@ -12,11 +12,10 @@ import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
 import App from "./App";
 import "./App.css";
 import { perfLog } from "@/lib/perf";
-import { DiffSettingsProvider } from "@/hooks/use-diff-settings";
 import { RecentReposProvider } from "@/hooks/use-recent-repos";
 import { WorkspaceProvider } from "@/hooks/use-workspace";
 import { EditorProvider } from "@/hooks/use-editor";
-import { EditorFontProvider } from "@/hooks/use-editor-font";
+import { SettingsProvider } from "@/hooks/use-settings";
 
 // next-themes ships d.ts that loses `children` under React 19's namespace
 // resolution; re-type the provider so JSX accepts children.
@@ -94,19 +93,17 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       poolOptions={poolOptions}
       highlighterOptions={highlighterOptions}
     >
-      <ThemeProvider attribute="class" defaultTheme="system">
-        <DiffSettingsProvider>
+      <SettingsProvider>
+        <ThemeProvider attribute="class" defaultTheme="system">
           <RecentReposProvider>
             <WorkspaceProvider>
               <EditorProvider>
-                <EditorFontProvider>
-                  <App />
-                </EditorFontProvider>
+                <App />
               </EditorProvider>
             </WorkspaceProvider>
           </RecentReposProvider>
-        </DiffSettingsProvider>
-      </ThemeProvider>
+        </ThemeProvider>
+      </SettingsProvider>
     </WorkerPoolContextProvider>
   </React.StrictMode>,
 );

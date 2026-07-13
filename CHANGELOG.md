@@ -9,6 +9,11 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- **Settings page** — ⌘, (or *Maincode → Settings…* / command-center "Open Settings") opens
+  a Zed-style settings tab in the editor. Three categories: Appearance (theme), Editor (font
+  size, font family, tab size, word wrap), and Terminal (font size). Changes apply live and
+  persist to `settings.json`. An "Edit in settings.json" button opens the raw file. ⌘S on
+  the Settings tab is a safe no-op.
 - Editor: **image viewer** — opening an image file (png, jpg, jpeg, gif, svg,
   webp, bmp, ico, avif) now renders it read-only in the editor instead of the
   "Cannot open a binary file" toast. Images are displayed fit-to-view with a

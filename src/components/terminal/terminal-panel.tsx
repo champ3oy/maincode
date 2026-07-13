@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useSettings } from "@/hooks/use-settings";
 
 interface TerminalPanelProps {
   cwd: string;
@@ -11,13 +12,25 @@ interface TerminalPanelProps {
 
 export function TerminalPanel({ cwd }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const { settings } = useSettings();
+  const { fontSize } = settings.terminal;
+
+  // Keep a ref to the current fontSize so the PTY effect can read the latest
+  // value without re-running the heavy setup effect.
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+
+  // Refs to the live term + fit so the font-size effect can update them.
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const ptyIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     const term = new Terminal({
-      fontSize: 12,
+      fontSize: fontSizeRef.current,
       fontFamily: '"App Mono", ui-monospace, monospace',
       cursorBlink: true,
     });
@@ -25,6 +38,9 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
     term.loadAddon(fit);
     term.open(host);
     fit.fit();
+
+    termRef.current = term;
+    fitRef.current = fit;
 
     let id: number | null = null;
     let unlistenOut: (() => void) | null = null;
@@ -46,6 +62,7 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
           return;
         }
         id = ptyId;
+        ptyIdRef.current = ptyId;
         unlistenOut = unOut;
         unlistenExit = unExit;
       })
@@ -65,6 +82,9 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
 
     return () => {
       disposed = true;
+      ptyIdRef.current = null;
+      termRef.current = null;
+      fitRef.current = null;
       ro.disconnect();
       dataSub.dispose();
       unlistenOut?.();
@@ -73,6 +93,19 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
       term.dispose();
     };
   }, [cwd]);
+
+  // Update the live terminal font size when the setting changes.
+  useEffect(() => {
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    term.options.fontSize = fontSize;
+    fit.fit();
+    const ptyId = ptyIdRef.current;
+    if (ptyId !== null) {
+      void invoke("pty_resize", { id: ptyId, cols: term.cols, rows: term.rows });
+    }
+  }, [fontSize]);
 
   return <div ref={hostRef} className="h-full w-full px-2 pt-1" />;
 }
