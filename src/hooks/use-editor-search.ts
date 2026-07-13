@@ -172,6 +172,7 @@ export function useEditorSearch(
   // -------------------------------------------------------------------------
   const openFind = useCallback((initialQuery?: string) => {
     setOpen(true);
+    setShowReplace(false); // ⌘F is find-only; ⌘⌥F opens the replace row
     if (initialQuery !== undefined) setQueryState(initialQuery);
   }, []);
 

@@ -9,6 +9,9 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- Editor: **Find & Replace** redesigned as a VS Code-style floating widget in the
+  top-right — match count, case / whole-word / regex toggles, prev/next, and an
+  expandable replace row (⌘F find, ⌘⌥F replace, Esc to close).
 - Editor: **font zoom** — ⌘= / ⌘- adjust the editor font size and ⌘0 resets it
   (also in the View menu); the chosen size persists across sessions.
 - Native multi-window support — open multiple projects at once, each window fully
