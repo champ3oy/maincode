@@ -427,15 +427,28 @@ export function CodeEditor({
     });
   }, [linting, typescript, path]);
 
-  // When the TS worker loads new types (e.g., node_modules/@types), force the
-  // lint compartment to re-run so diagnostics reflect the updated type info.
+  // When the TS worker loads new types (e.g., node_modules/@types), re-run the
+  // linter so diagnostics reflect the updated type info. Warm-up fires many
+  // `typesUpdated` events (one per resolution round); forcing a lint on each
+  // would start overlapping async getDiagnostics whose out-of-order results let
+  // an intermediate (still-erroring) snapshot win — leaving stale red until the
+  // user switches files. Debounce so the burst collapses into ONE re-lint after
+  // types settle, which queries the final, converged (clean) diagnostics.
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = tsClient().onTypesUpdated(() => {
       if (!isTsWorkerPath(pathRef.current)) return;
-      const view = viewRef.current;
-      if (view) forceLinting(view);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const view = viewRef.current;
+        if (view) forceLinting(view);
+      }, 300);
     });
-    return unsub;
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsub();
+    };
   }, []);
 
   // Go-to-definition reveal: when App sets `revealTarget` for the ACTIVE path
