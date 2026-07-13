@@ -77,10 +77,19 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
       .catch((e) => term.write(`\r\nfailed to start shell: ${e}\r\n`));
 
     const dataSub = term.onData((data) => {
+      // EXPERIMENT: Claude Code skips the kitty keyboard protocol when the
+      // terminal identifies as "xterm.js" (its detection predates xterm 6.1's
+      // support). Spoof the XTVERSION reply (DCS > | … ST) so it treats us as a
+      // kitty-capable terminal and enables the protocol. Doesn't touch TERM.
+      let out = data;
+      if (data.startsWith("\x1bP>|")) {
+        out = "\x1bP>|kitty(0.42.0)\x1b\\";
+        console.log("[maincode-kbd] spoofed version:", JSON.stringify(out));
+      }
       // TEMP diagnostic: what xterm sends to the PTY. On Shift+Enter this should
       // be "\x1b[13;2u" when kitty is active, not "\r".
-      console.log("[maincode-kbd] term→pty:", JSON.stringify(data));
-      if (id !== null) void invoke("pty_write", { id, data });
+      console.log("[maincode-kbd] term→pty:", JSON.stringify(out));
+      if (id !== null) void invoke("pty_write", { id, data: out });
     });
 
     const ro = new ResizeObserver(() => {
