@@ -180,7 +180,29 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         }
       }
       if (changed) {
+        // Retry resolutions TS has already cached as failed. When a bare
+        // specifier resolves through a package's package.json "exports"/"types"
+        // map, TS must read that package.json AT resolution time. On the first
+        // lint the manifest isn't in the VFS yet (readFile returns undefined and
+        // is only recorded as a want), so TS can't parse the exports map, falls
+        // back to legacy resolution — which fails for exports-only packages like
+        // react-router-dom — and CACHES that failure. When the manifest later
+        // arrives here, the LanguageService reuses its cached program and module
+        // resolutions (the package.json is not a script file, so no script
+        // version changes to force re-resolution) and never retries, leaving a
+        // permanent "Cannot find module" even though the package is present.
+        // getProjectVersion bumps alone do NOT invalidate that failed-lookup
+        // cache. cleanupSemanticCache() drops the cached programs/resolutions so
+        // the next lint re-resolves fresh against the now-larger VFS; clearing
+        // `missing` lets any path previously recorded absent (including a real
+        // file that briefly came back content:null — over the 2 MB read cap,
+        // binary, or a transient read rejection) be re-probed. This
+        // self-terminates: `files` only grows, so eventually a round loads
+        // nothing new (`changed` stays false), `missing` sticks, and the loop
+        // converges.
+        missing.clear();
         projectVersion++;
+        service?.cleanupSemanticCache();
         rpc.notify({ kind: "typesUpdated" });
       }
       return true;
