@@ -17,7 +17,7 @@ entries under a new version heading.
   ([#1](https://github.com/champ3oy/maincode/pull/1))
 
 ### Fixed
-- Terminal: **Shift+Enter** now sends a newline (LF) instead of submitting, so
+- Terminal: **Shift+Enter** now inserts a newline instead of submitting, so
   multi-line input works in TUI apps (e.g. `claude`).
 - New windows were missing capabilities, so dragging, IPC, events, and dialogs
   were denied in them. ([#1](https://github.com/champ3oy/maincode/pull/1))

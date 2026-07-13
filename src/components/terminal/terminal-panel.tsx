@@ -64,13 +64,14 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
       if (id !== null) void invoke("pty_write", { id, data });
     });
 
-    // Shift+Enter inserts a newline (LF) instead of submitting (CR), so
-    // multi-line input works in TUI apps (e.g. `claude`) that follow the
-    // CR = submit / LF = newline convention.
+    // Shift+Enter inserts a newline instead of submitting. We send ESC+CR
+    // (`\x1b\r`) — the Meta/Option+Enter sequence TUI apps like Claude Code
+    // recognize as "newline". A bare LF/CR is treated as submit, so those
+    // don't work.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === "keydown" && e.key === "Enter" && e.shiftKey) {
-        if (id !== null) void invoke("pty_write", { id, data: "\n" });
-        return false; // suppress xterm's default \r
+        if (id !== null) void invoke("pty_write", { id, data: "\x1b\r" });
+        return false; // suppress xterm's default \r (submit)
       }
       return true;
     });
