@@ -161,6 +161,12 @@ function App() {
     return () => window.removeEventListener("contextmenu", onContextMenu);
   }, []);
 
+  // Reflect the open project in the native window title (used by the Dock menu
+  // window list and the app switcher). Empty windows show "Maincode".
+  useEffect(() => {
+    void getCurrentWindow().setTitle(rootName ?? "Maincode");
+  }, [rootName]);
+
   // Load workspace files when palette opens; clear stale list on close.
   useEffect(() => {
     if (!paletteOpen) {

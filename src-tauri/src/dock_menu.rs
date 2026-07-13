@@ -24,8 +24,9 @@ use std::sync::OnceLock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, ffi, msg_send, sel};
-use objc2_app_kit::{NSApplication, NSMenu};
+use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSString};
+use tauri::Manager;
 
 /// The Tauri app handle, needed to open new windows from the Dock-menu action.
 /// Set once during [`install`].
@@ -51,6 +52,34 @@ define_class!(
             if let Some(app) = APP_HANDLE.get() {
                 if let Err(e) = crate::menu::open_new_window(app) {
                     eprintln!("[maincode] dock menu: failed to open new window: {e}");
+                }
+            }
+        }
+
+        /// Action fired when one of the per-window Dock-menu items is clicked.
+        /// The clicked `NSMenuItem` carries the target window's Tauri label in
+        /// its `representedObject`; we read it back and focus that window.
+        /// Runs on the main thread (AppKit dispatches menu actions there).
+        #[unsafe(method(focusWindowFromDock:))]
+        fn focus_window_from_dock(&self, sender: Option<&AnyObject>) {
+            // The sender is the clicked NSMenuItem. Its `representedObject` was
+            // set (in `build_dock_menu`) to an NSString holding the window's
+            // Tauri label. `downcast_ref` is a runtime-checked cast, so a wrong
+            // class (or None) simply yields `None` — no unsafe is required.
+            let Some(item) = sender.and_then(|s| s.downcast_ref::<NSMenuItem>()) else {
+                return;
+            };
+            let Some(represented) = item.representedObject() else {
+                return;
+            };
+            let Some(label_ns) = represented.downcast_ref::<NSString>() else {
+                return;
+            };
+            let label = label_ns.to_string();
+
+            if let Some(app) = APP_HANDLE.get() {
+                if let Some(w) = app.get_webview_window(&label) {
+                    let _ = w.set_focus();
                 }
             }
         }
@@ -86,6 +115,55 @@ fn build_dock_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         // the process lifetime); AppKit stores the target unretained.
         let target_obj: &AnyObject = target.as_ref();
         unsafe { item.setTarget(Some(target_obj)) };
+    }
+
+    // Below the "New Window" item, list every open editor window. Each entry is
+    // labelled by the window's native title (set to the project folder name by
+    // the frontend, defaulting to "Maincode"); clicking one focuses that
+    // window via `focusWindowFromDock:`.
+    if let Some(app) = APP_HANDLE.get() {
+        let mut entries: Vec<(String, String)> = app
+            .webview_windows()
+            .iter()
+            .map(|(label, w)| (label.clone(), w.title().unwrap_or_else(|_| label.clone())))
+            .collect();
+        if !entries.is_empty() {
+            // Stable ordering by Tauri label (main, w-1, w-2, …).
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let separator = NSMenuItem::separatorItem(mtm);
+            menu.addItem(&separator);
+
+            for (label, title) in entries {
+                let title_ns = NSString::from_str(&title);
+                // SAFETY: `focusWindowFromDock:` is a valid selector implemented
+                // by `DockMenuTarget`. `addItemWithTitle:action:keyEquivalent:`
+                // appends the item and returns it (autoreleased, borrowed here).
+                let win_item = unsafe {
+                    menu.addItemWithTitle_action_keyEquivalent(
+                        &title_ns,
+                        Some(sel!(focusWindowFromDock:)),
+                        &empty_key,
+                    )
+                };
+
+                if let Some(target) = DOCK_TARGET.get() {
+                    // SAFETY: the target outlives the menu item (stored in
+                    // DOCK_TARGET for the process lifetime); AppKit stores the
+                    // target unretained.
+                    let target_obj: &AnyObject = target.as_ref();
+                    unsafe { win_item.setTarget(Some(target_obj)) };
+                }
+
+                // Stash the window's Tauri label so `focusWindowFromDock:` can
+                // read it back. The NSString is retained by the menu item.
+                let label_ns = NSString::from_str(&label);
+                // SAFETY: `label_ns` is an NSString (the type the action reads
+                // back via `downcast_ref::<NSString>()`); the menu item retains
+                // it, so it stays valid for the item's lifetime.
+                unsafe { win_item.setRepresentedObject(Some(&label_ns)) };
+            }
+        }
     }
 
     menu
