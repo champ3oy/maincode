@@ -119,70 +119,12 @@ const pierreTheme = EditorView.theme(
   { dark: true },
 );
 
-// Restyles CodeMirror's built-in find/replace panel (@codemirror/search) to
-// match the app: our inputs, buttons, and pierre-tinted match highlights.
-// Uses app CSS variables so it adapts to light/dark automatically. Applied in
-// both themes.
-export const searchPanelTheme = EditorView.theme({
-  ".cm-panels": {
-    backgroundColor: "var(--popover)",
-    color: "var(--foreground)",
-    borderColor: "var(--border)",
-  },
-  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--border)" },
-  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
-  ".cm-panel.cm-search": {
-    display: "flex",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: "6px",
-    padding: "6px 8px",
-    fontSize: "12px",
-    fontFamily: "inherit",
-  },
-  ".cm-panel.cm-search label": {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "4px",
-    fontSize: "11px",
-    color: "var(--muted-foreground)",
-  },
-  ".cm-panel.cm-search input[type=checkbox]": {
-    accentColor: c.cursor,
-    margin: "0",
-  },
-  ".cm-textfield": {
-    backgroundColor: "var(--background)",
-    color: "var(--foreground)",
-    border: "1px solid var(--border)",
-    borderRadius: "6px",
-    padding: "3px 8px",
-    fontSize: "12px",
-    outline: "none",
-  },
-  ".cm-textfield:focus": { borderColor: c.cursor },
-  ".cm-button": {
-    backgroundColor: "var(--muted)",
-    backgroundImage: "none",
-    color: "var(--foreground)",
-    border: "1px solid var(--border)",
-    borderRadius: "6px",
-    padding: "3px 10px",
-    fontSize: "12px",
-    cursor: "pointer",
-  },
-  ".cm-button:hover": {
-    backgroundColor: "var(--accent)",
-    color: "var(--accent-foreground)",
-  },
-  ".cm-button:active": { backgroundImage: "none" },
-  ".cm-panel.cm-search [name=close]": {
-    color: "var(--muted-foreground)",
-    fontSize: "16px",
-    padding: "0 4px",
-    cursor: "pointer",
-  },
-  ".cm-panel.cm-search [name=close]:hover": { color: "var(--foreground)" },
+// Match highlight colours used by the floating find widget.
+// The old docked-panel styles (.cm-panels, .cm-textfield, .cm-button, etc.)
+// have been removed because the built-in panel is never rendered. Only the
+// match-highlight rules are kept — they are applied by @codemirror/search
+// regardless of which UI drives the search.
+export const searchMatchTheme = EditorView.theme({
   ".cm-searchMatch": {
     backgroundColor: "rgba(255, 171, 22, 0.22)",
     borderRadius: "2px",
