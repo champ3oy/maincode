@@ -9,7 +9,6 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
-- Terminal: URLs are now **clickable** and open in your default browser.
 - Native multi-window support — open multiple projects at once, each window fully
   independent (file tree, git, terminals). New Window via **File → New Window**
   (⇧⌘N) and the macOS **Dock menu**, which also lists open windows to switch

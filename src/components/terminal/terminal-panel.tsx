@@ -1,11 +1,9 @@
 import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface TerminalPanelProps {
   cwd: string;
@@ -25,13 +23,6 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    // Make URLs printed in the terminal clickable — opened in the default
-    // browser (not the app webview) via Tauri's opener.
-    term.loadAddon(
-      new WebLinksAddon((_event, uri) => {
-        void openUrl(uri);
-      }),
-    );
     term.open(host);
     fit.fit();
 
