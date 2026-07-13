@@ -218,8 +218,12 @@ async function handle(req: WorkerRequest): Promise<unknown> {
       flushWanted();
       if (!info) return null;
       return {
-        text: ts.displayPartsToString(info.displayParts),
-        docs: ts.displayPartsToString(info.documentation)?.split("\n")[0] || undefined,
+        signature: (info.displayParts ?? []).map((p) => ({ text: p.text, kind: p.kind })),
+        documentation: ts.displayPartsToString(info.documentation ?? []),
+        tags: (info.tags ?? []).map((tag) => ({
+          name: tag.name,
+          text: ts.displayPartsToString(tag.text ?? []),
+        })),
       };
     }
     case "definition": {

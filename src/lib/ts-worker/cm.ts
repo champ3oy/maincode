@@ -11,6 +11,7 @@ import {
 import { StateEffect, StateField } from "@codemirror/state";
 import { isTsWorkerPath, tsClient } from "./client";
 import type { CompletionItemData } from "./protocol";
+import { renderHover } from "./hover-render";
 
 const KIND_MAP: Record<string, string> = {
   var: "variable", let: "variable", const: "variable", "local var": "variable",
@@ -230,21 +231,7 @@ export function tsHoverExtension(getPath: () => string): Extension {
     if (!info) return null;
     return {
       pos,
-      create: () => {
-        const dom = document.createElement("div");
-        dom.className = "cm-ts-hover";
-        const sig = document.createElement("div");
-        sig.style.fontFamily = "inherit";
-        sig.textContent = info.text;
-        dom.appendChild(sig);
-        if (info.docs) {
-          const docs = document.createElement("div");
-          docs.style.opacity = "0.75";
-          docs.textContent = info.docs;
-          dom.appendChild(docs);
-        }
-        return { dom };
-      },
+      create: () => ({ dom: renderHover(info) }),
     };
   });
 }

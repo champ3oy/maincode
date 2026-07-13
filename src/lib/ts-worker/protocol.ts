@@ -33,9 +33,15 @@ export interface DiagnosticData {
   message: string;
 }
 
-export interface HoverResult {
+export interface HoverPart {
   text: string;
-  docs?: string;
+  kind: string; // ts SymbolDisplayPart.kind, e.g. "keyword", "functionName", "punctuation"
+}
+
+export interface HoverResult {
+  signature: HoverPart[]; // info.displayParts, structured (for syntax coloring)
+  documentation: string; // FULL markdown (info.documentation flattened) — may be ""
+  tags: { name: string; text: string }[]; // JSDoc tags: @example/@param/@returns/etc.
 }
 
 // Go-to-definition target. line/column are 1-based (CodeMirror convention),
