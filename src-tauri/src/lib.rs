@@ -22,6 +22,15 @@ fn get_launch_path() -> Option<String> {
     LAUNCH_PATH.get().map(|p| p.to_string_lossy().to_string())
 }
 
+/// The label of the currently focused window, falling back to `main`.
+fn focused_window_label(app: &tauri::AppHandle) -> String {
+    app.webview_windows()
+        .into_iter()
+        .find(|(_, w)| w.is_focused().unwrap_or(false))
+        .map(|(label, _)| label)
+        .unwrap_or_else(|| "main".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -29,9 +38,23 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .menu(|handle| menu::build_menu(handle))
         .on_menu_event(|app, event| {
-            // Forward custom menu-item ids to the frontend; predefined items
-            // (copy/paste/quit/…) are handled natively.
-            let _ = app.emit("menu-action", event.id().0.as_str());
+            let id = event.id().0.as_str();
+            if id == "new-window" {
+                if let Err(e) = menu::open_new_window(app) {
+                    eprintln!("[maincode] failed to open new window: {e}");
+                }
+                return;
+            }
+            // Forward every other custom action to the focused window only, so
+            // Save / New File / Toggle Terminal act on the active window.
+            let label = focused_window_label(app);
+            let _ = app.emit_to(label.as_str(), "menu-action", id);
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let label = window.label().to_string();
+                window.state::<AppState>().remove_window(&label);
+            }
         })
         .manage(AppState::default())
         .manage(pty::PtyState::default())
