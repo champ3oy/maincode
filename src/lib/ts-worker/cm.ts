@@ -27,6 +27,11 @@ function toCompletion(item: CompletionItemData, path: string, offset: number): C
       const labelChange = view.state.changes({ from, to, insert: item.insertText ?? item.label });
       view.dispatch({ changes: labelChange });
       const docAfterLabel = view.state.doc;
+      // Safe despite the ~200ms doc-sync debounce: v1 import edits are same-file
+      // and land at the top of the file (independent of the cursor); the
+      // docAfterLabel identity check drops the edits if ANY change landed since,
+      // and mapPos re-bases them through the label insertion. Do not "fix" this
+      // into a stale-doc query.
       void tsClient()
         .getCompletionDetails(path, offset, item)
         .then((details) => {

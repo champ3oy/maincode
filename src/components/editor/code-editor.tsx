@@ -384,6 +384,7 @@ export function CodeEditor({
   // lint compartment to re-run so diagnostics reflect the updated type info.
   useEffect(() => {
     const unsub = tsClient().onTypesUpdated(() => {
+      if (!isTsWorkerPath(pathRef.current)) return;
       const view = viewRef.current;
       if (view) forceLinting(view);
     });
