@@ -38,6 +38,7 @@ import {
   type FileEntry,
 } from "@/lib/tauri";
 import { useEditor } from "@/hooks/use-editor";
+import { SETTINGS_PATH } from "@/lib/settings";
 import { EditorArea } from "@/components/editor/editor-area";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { useDiffs } from "@/hooks/use-diffs";
@@ -340,6 +341,9 @@ function App() {
       case "font-reset":
         fontReset();
         break;
+      case "open-settings":
+        void openFile(SETTINGS_PATH);
+        break;
     }
   };
   const menuActionRef = useRef(onMenuAction);
@@ -399,8 +403,13 @@ function App() {
         label: "Toggle Terminal",
         run: () => setShowTerminal((v) => !v),
       },
+      {
+        id: "open-settings",
+        label: "Open Settings",
+        run: () => void openFile(SETTINGS_PATH),
+      },
     ],
-    [activeTab, saveFile, patch, handleOpenFolderDialog],
+    [activeTab, saveFile, patch, handleOpenFolderDialog, openFile],
   );
 
   // Restore the CLI launch path / last folder only in the primary window;

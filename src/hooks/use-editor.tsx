@@ -10,6 +10,7 @@ import {
 import { toast } from "sonner";
 import { readFile, writeFile } from "@/lib/fs";
 import { isImagePath } from "@/lib/image";
+import { isSettingsPath, SETTINGS_PATH } from "@/lib/settings";
 import { basename } from "@/hooks/use-workspace";
 import {
   initialTabsState,
@@ -45,6 +46,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "activate", path });
       return;
     }
+    // Settings pseudo-tab: no file to read; render via SettingsView.
+    if (isSettingsPath(path)) {
+      dispatch({ type: "open", path, name: "Settings", content: "" });
+      return;
+    }
     // Image files are displayed by ImageViewer; they hold empty text content.
     if (isImagePath(path)) {
       dispatch({ type: "open", path, name: basename(path), content: "" });
@@ -76,7 +82,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveFile = useCallback(async (path: string) => {
-    // CRITICAL: image tabs hold empty content — writing would destroy the file.
+    // CRITICAL: settings and image tabs hold empty content — writing would destroy files.
+    if (isSettingsPath(path)) return;
     if (isImagePath(path)) return;
     const tab = stateRef.current.tabs.find((t) => t.path === path);
     if (!tab) return;

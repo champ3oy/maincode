@@ -2,8 +2,10 @@ import { useEffect, useRef } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useEditor } from "@/hooks/use-editor";
 import { isImagePath } from "@/lib/image";
+import { isSettingsPath, settingsPath } from "@/lib/settings";
 import { CodeEditor } from "./code-editor";
 import { ImageViewer } from "./image-viewer";
+import { SettingsView } from "./settings-view";
 import { TabBar } from "./tab-bar";
 
 interface EditorAreaProps {
@@ -18,6 +20,7 @@ export function EditorArea({ onCursor }: EditorAreaProps) {
     closeTab,
     editFile,
     saveFile,
+    openFile,
     isDirty,
   } = useEditor();
 
@@ -63,7 +66,13 @@ export function EditorArea({ onCursor }: EditorAreaProps) {
       />
       {activeTab ? (
         <div className="min-h-0 flex-1">
-          {isImagePath(activeTab.path) ? (
+          {isSettingsPath(activeTab.path) ? (
+            <SettingsView
+              onEditJson={() => {
+                void settingsPath().then((p) => void openFile(p));
+              }}
+            />
+          ) : isImagePath(activeTab.path) ? (
             <ImageViewer path={activeTab.path} />
           ) : (
             <CodeEditor
