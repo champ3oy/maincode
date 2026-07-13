@@ -53,15 +53,13 @@ export function acquireSession(
     const el = existing.term.element;
     if (el && el.parentElement !== host) host.appendChild(el);
     // Defer the fit + repaint to the next frame: the re-parented element has no
-    // layout yet in this tick, so a synchronous fit measures 0/stale dimensions
-    // and leaves the renderer glitched until a manual resize. After a frame the
-    // host has real dimensions, so we cache the terminal's current size, force a
-    // dimension change (a resize xterm can't no-op away — that's what a manual
-    // drag does), fit to the true size, and repaint every row.
+    // layout in this tick, so a synchronous fit measures stale dimensions and
+    // leaves the renderer glitched until a manual resize. After a frame the host
+    // has real dimensions; fit to them and repaint every row. (No artificial
+    // resize — changing the display size without a matching pty_resize desyncs
+    // the shell and causes continuous re-render churn.)
     requestAnimationFrame(() => {
       if (existing.disposed || !existing.term.element) return;
-      const { cols, rows } = existing.term;
-      existing.term.resize(Math.max(1, cols), Math.max(1, rows === 1 ? 2 : rows - 1));
       existing.fit.fit();
       existing.term.refresh(0, existing.term.rows - 1);
     });
