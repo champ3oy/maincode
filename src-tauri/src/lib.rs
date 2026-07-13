@@ -90,6 +90,7 @@ pub fn run() {
             fs_ops::delete_path,
             fs_ops::list_files_recursive,
             fs_ops::search_file_contents,
+            fs_ops::read_image_base64,
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,

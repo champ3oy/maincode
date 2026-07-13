@@ -27,6 +27,9 @@ git2 = { version = "0.20", default-features = false, features = ["https", "ssh",
 notify = "8"
 notify-debouncer-full = "0.5"
 portable-pty = "0.9"
+# base64 is already in the lockfile transitively (v0.22.1); declaring it here
+# adds no new package — it just makes the crate directly nameable.
+base64 = "0.22"
 
 # macOS-only native interop for the Dock-menu "New Window" item. These crates
 # are already in the tree (pulled in transitively by tauri/tao); listing them

@@ -51,3 +51,11 @@ export function searchFileContents(
 ): Promise<string[]> {
   return invoke<string[]>("search_file_contents", { root, query, max });
 }
+
+/**
+ * Read an image file as a base64-encoded string (no `data:` prefix).
+ * Rejects with "too_large" if the file exceeds 25 MB.
+ */
+export function readImageBase64(path: string): Promise<string> {
+  return invoke<string>("read_image_base64", { path });
+}

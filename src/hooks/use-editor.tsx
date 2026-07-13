@@ -9,6 +9,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { readFile, writeFile } from "@/lib/fs";
+import { isImagePath } from "@/lib/image";
 import { basename } from "@/hooks/use-workspace";
 import {
   initialTabsState,
@@ -44,6 +45,11 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "activate", path });
       return;
     }
+    // Image files are displayed by ImageViewer; they hold empty text content.
+    if (isImagePath(path)) {
+      dispatch({ type: "open", path, name: basename(path), content: "" });
+      return;
+    }
     const result = await readFile(path).catch((e) => {
       toast.error(`Failed to open: ${e}`);
       return null;
@@ -70,6 +76,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveFile = useCallback(async (path: string) => {
+    // CRITICAL: image tabs hold empty content — writing would destroy the file.
+    if (isImagePath(path)) return;
     const tab = stateRef.current.tabs.find((t) => t.path === path);
     if (!tab) return;
     try {
