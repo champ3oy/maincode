@@ -12,7 +12,6 @@ import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
 import App from "./App";
 import "./App.css";
 import { perfLog } from "@/lib/perf";
-import { DiffSettingsProvider } from "@/hooks/use-diff-settings";
 import { RecentReposProvider } from "@/hooks/use-recent-repos";
 import { WorkspaceProvider } from "@/hooks/use-workspace";
 import { EditorProvider } from "@/hooks/use-editor";
@@ -96,15 +95,13 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     >
       <SettingsProvider>
         <ThemeProvider attribute="class" defaultTheme="system">
-          <DiffSettingsProvider>
-            <RecentReposProvider>
-              <WorkspaceProvider>
-                <EditorProvider>
-                  <App />
-                </EditorProvider>
-              </WorkspaceProvider>
-            </RecentReposProvider>
-          </DiffSettingsProvider>
+          <RecentReposProvider>
+            <WorkspaceProvider>
+              <EditorProvider>
+                <App />
+              </EditorProvider>
+            </WorkspaceProvider>
+          </RecentReposProvider>
         </ThemeProvider>
       </SettingsProvider>
     </WorkerPoolContextProvider>

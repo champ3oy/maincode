@@ -5,7 +5,7 @@ const DEFAULT_SETTINGS: &str = r#"{
   "theme": "system",
   "editor": { "fontSize": 13, "fontFamily": "app-mono", "tabSize": 2, "wordWrap": false },
   "terminal": { "fontSize": 12 },
-  "diff": { "fontSize": 13, "wordWrap": false }
+  "diff": { "fontSize": 13, "fontFamily": "app-mono", "wordWrap": false }
 }"#;
 
 pub fn settings_file_path_inner(config_dir: &Path) -> PathBuf {

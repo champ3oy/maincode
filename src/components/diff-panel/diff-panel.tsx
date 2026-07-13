@@ -30,11 +30,16 @@ import {
   DIFF_ADDITION_COLOR,
   DIFF_DELETION_COLOR,
 } from "@/lib/status";
-import {
-  resolveFontFamily,
-  resolveLineHeight,
-  useDiffSettings,
-} from "@/hooks/use-diff-settings";
+import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
+import type { FontChoice } from "@/hooks/use-settings";
+
+function resolveFontFamily(font: FontChoice): string {
+  return FONT_STACKS[font];
+}
+
+function resolveLineHeight(fontSize: number): number {
+  return Math.round(fontSize * 1.46);
+}
 import type { ChangeKind, FileEntry } from "@/lib/tauri";
 import type { FileDiffContents } from "@/hooks/use-diffs";
 
@@ -113,8 +118,8 @@ export function DiffPanel({
   const { resolvedTheme } = useTheme();
   const themeType: "light" | "dark" =
     resolvedTheme === "dark" ? "dark" : "light";
-  const { settings } = useDiffSettings();
-  const { font, fontSize, wrap } = settings;
+  const { settings } = useSettings();
+  const { fontFamily: font, fontSize, wordWrap: wrap } = settings.diff;
   const workerPoolReady = useIsWorkerPoolReady();
 
   const viewerRef = useRef<CodeViewHandle<undefined> | null>(null);

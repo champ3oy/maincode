@@ -91,8 +91,19 @@ describe("mergeSettings", () => {
       theme: "dark",
       editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true },
       terminal: { fontSize: 14 },
-      diff: { fontSize: 15, wordWrap: true },
+      diff: { fontSize: 15, fontFamily: "system-mono", wordWrap: true },
     };
     expect(mergeSettings(full)).toEqual(full);
+  });
+
+  it("accepts valid diff.fontFamily values", () => {
+    expect(mergeSettings({ diff: { fontFamily: "system-mono" } }).diff.fontFamily).toBe("system-mono");
+    expect(mergeSettings({ diff: { fontFamily: "courier" } }).diff.fontFamily).toBe("courier");
+  });
+
+  it("falls back to default diff.fontFamily for invalid values", () => {
+    expect(mergeSettings({ diff: { fontFamily: "comic-sans" } }).diff.fontFamily).toBe(
+      DEFAULT_SETTINGS.diff.fontFamily,
+    );
   });
 });

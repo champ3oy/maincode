@@ -2,7 +2,12 @@ import { useState, useMemo } from "react";
 import { IconMinus, IconPlus, IconExternalLink } from "@tabler/icons-react";
 import { useSettings } from "@/hooks/use-settings";
 import type { ThemeChoice, FontChoice } from "@/hooks/use-settings";
-import { FONT_LABELS } from "@/hooks/use-diff-settings";
+
+const FONT_LABELS: Record<FontChoice, string> = {
+  "app-mono": "App Mono",
+  "system-mono": "System Mono",
+  courier: "Courier",
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -12,7 +17,7 @@ interface SettingsViewProps {
   onEditJson: () => void;
 }
 
-type Category = "Appearance" | "Editor" | "Terminal";
+type Category = "Appearance" | "Editor" | "Terminal" | "Source Control";
 
 interface RowDef {
   id: string;
@@ -139,7 +144,7 @@ function Row({ label, description, control }: RowProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
-const CATEGORIES: Category[] = ["Appearance", "Editor", "Terminal"];
+const CATEGORIES: Category[] = ["Appearance", "Editor", "Terminal", "Source Control"];
 
 const THEME_OPTIONS: { value: ThemeChoice; label: string }[] = [
   { value: "system", label: "System" },
@@ -240,6 +245,46 @@ export function SettingsView({ onEditJson }: SettingsViewProps) {
             min={8}
             max={24}
             onChange={(fontSize) => patch({ terminal: { fontSize } })}
+          />
+        ),
+      },
+      // Source Control
+      {
+        id: "diff-font-family",
+        label: "Diff Font",
+        description: "Monospace font used in the diff viewer.",
+        category: "Source Control",
+        control: (
+          <SettingsSelect<FontChoice>
+            value={settings.diff.fontFamily}
+            options={FONT_OPTIONS}
+            onChange={(fontFamily) => patch({ diff: { fontFamily } })}
+          />
+        ),
+      },
+      {
+        id: "diff-font-size",
+        label: "Diff Font Size",
+        description: "Diff viewer font size in points (8–32).",
+        category: "Source Control",
+        control: (
+          <Stepper
+            value={settings.diff.fontSize}
+            min={8}
+            max={32}
+            onChange={(fontSize) => patch({ diff: { fontSize } })}
+          />
+        ),
+      },
+      {
+        id: "diff-word-wrap",
+        label: "Line Wrapping",
+        description: "Wrap long lines instead of scrolling horizontally.",
+        category: "Source Control",
+        control: (
+          <Toggle
+            value={settings.diff.wordWrap}
+            onChange={(wordWrap) => patch({ diff: { wordWrap } })}
           />
         ),
       },

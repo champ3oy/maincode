@@ -818,6 +818,7 @@ function App() {
               return path;
             }}
             onBranchSwitched={handleBranchSwitched}
+            onOpenSettings={() => void openFile(SETTINGS_PATH)}
           />
         )}
       </div>

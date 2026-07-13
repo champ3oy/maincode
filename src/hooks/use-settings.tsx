@@ -29,9 +29,21 @@ export interface Settings {
   };
   diff: {
     fontSize: number;
+    fontFamily: FontChoice;
     wordWrap: boolean;
   };
 }
+
+// ---------------------------------------------------------------------------
+// Font stacks
+// ---------------------------------------------------------------------------
+
+export const FONT_STACKS: Record<FontChoice, string> = {
+  "app-mono": "'App Mono', ui-monospace, monospace",
+  "system-mono":
+    "ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
+  courier: "'Courier New', Courier, monospace",
+};
 
 // Recursive partial — lets callers pass any subset of the settings tree.
 export type DeepPartial<T> = T extends object
@@ -46,7 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
   editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false },
   terminal: { fontSize: 12 },
-  diff: { fontSize: 13, wordWrap: false },
+  diff: { fontSize: 13, fontFamily: "app-mono", wordWrap: false },
 };
 
 // ---------------------------------------------------------------------------
@@ -119,13 +131,14 @@ export function mergeSettings(raw: unknown): Settings {
   const diffFontSize = isFiniteNumber(rd.fontSize)
     ? clamp(rd.fontSize, 8, 32)
     : d.diff.fontSize;
+  const diffFontFamily = isFontChoice(rd.fontFamily) ? rd.fontFamily : d.diff.fontFamily;
   const diffWordWrap = typeof rd.wordWrap === "boolean" ? rd.wordWrap : d.diff.wordWrap;
 
   return {
     theme,
     editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap },
     terminal: { fontSize: terminalFontSize },
-    diff: { fontSize: diffFontSize, wordWrap: diffWordWrap },
+    diff: { fontSize: diffFontSize, fontFamily: diffFontFamily, wordWrap: diffWordWrap },
   };
 }
 
@@ -148,6 +161,7 @@ function deepMergePartial(current: Settings, partial: DeepPartial<Settings>): Se
     },
     diff: {
       fontSize: partial.diff?.fontSize ?? current.diff.fontSize,
+      fontFamily: partial.diff?.fontFamily ?? current.diff.fontFamily,
       wordWrap: partial.diff?.wordWrap ?? current.diff.wordWrap,
     },
   });

@@ -9,8 +9,7 @@ import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { pierreDark, searchMatchTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
-import { useSettings } from "@/hooks/use-settings";
-import { FONT_STACKS } from "@/hooks/use-diff-settings";
+import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { FindWidget } from "./find-widget";
 
