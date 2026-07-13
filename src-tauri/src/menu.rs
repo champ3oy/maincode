@@ -1,5 +1,12 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Runtime, TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
+
+static WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+fn next_window_label() -> String {
+    format!("w-{}", WINDOW_COUNTER.fetch_add(1, Ordering::SeqCst))
+}
 
 // Builds the native application menu. Custom items carry ids that are forwarded
 // to the frontend via the `menu-action` event (see lib.rs `on_menu_event`);
@@ -15,6 +22,9 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .quit()
         .build()?;
 
+    let new_window = MenuItemBuilder::with_id("new-window", "New Window")
+        .accelerator("CmdOrCtrl+Shift+N")
+        .build(app)?;
     let new_file = MenuItemBuilder::with_id("new-file", "New File")
         .accelerator("CmdOrCtrl+N")
         .build(app)?;
@@ -32,6 +42,8 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .build(app)?;
     let close_folder = MenuItemBuilder::with_id("close-folder", "Close Folder").build(app)?;
     let file_menu = SubmenuBuilder::new(app, "File")
+        .item(&new_window)
+        .separator()
         .item(&new_file)
         .item(&open_folder)
         .separator()
@@ -81,4 +93,17 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&view_menu)
         .item(&window_menu)
         .build()
+}
+
+/// Open a new empty editor window, matching the primary window's config.
+pub fn open_new_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
+    let label = next_window_label();
+    WebviewWindowBuilder::new(app, &label, WebviewUrl::App("index.html".into()))
+        .title("Maincode")
+        .inner_size(1200.0, 800.0)
+        .min_inner_size(1200.0, 800.0)
+        .title_bar_style(TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .build()?;
+    Ok(())
 }

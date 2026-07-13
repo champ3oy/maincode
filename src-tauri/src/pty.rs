@@ -55,6 +55,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<PtyState>,
 ) -> Result<u32, String> {
     let pty_system = native_pty_system();
@@ -86,6 +87,7 @@ pub fn pty_spawn(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
     let app_out = app.clone();
+    let target = window.label().to_string();
     std::thread::spawn(move || {
         let mut carry: Vec<u8> = Vec::new();
         let mut buf = [0u8; 8192];
@@ -96,12 +98,12 @@ pub fn pty_spawn(
                     carry.extend_from_slice(&buf[..n]);
                     let text = drain_utf8(&mut carry);
                     if !text.is_empty() {
-                        let _ = app_out.emit(&format!("pty-output-{id}"), text);
+                        let _ = app_out.emit_to(target.as_str(), &format!("pty-output-{id}"), text);
                     }
                 }
             }
         }
-        let _ = app_out.emit(&format!("pty-exit-{id}"), ());
+        let _ = app_out.emit_to(target.as_str(), &format!("pty-exit-{id}"), ());
     });
 
     // Reap the child so it doesn't zombie.

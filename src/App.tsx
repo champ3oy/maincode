@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
@@ -159,6 +160,12 @@ function App() {
     window.addEventListener("contextmenu", onContextMenu);
     return () => window.removeEventListener("contextmenu", onContextMenu);
   }, []);
+
+  // Reflect the open project in the native window title (used by the Dock menu
+  // window list and the app switcher). Empty windows show "Maincode".
+  useEffect(() => {
+    void getCurrentWindow().setTitle(rootName ?? "Maincode");
+  }, [rootName]);
 
   // Load workspace files when palette opens; clear stale list on close.
   useEffect(() => {
@@ -366,8 +373,10 @@ function App() {
     [activeTab, saveFile, setTheme, handleOpenFolderDialog],
   );
 
-  // Restore: CLI launch path first, then last opened folder.
+  // Restore the CLI launch path / last folder only in the primary window;
+  // every New Window (label "w-N") starts empty on the Welcome screen.
   useEffect(() => {
+    if (getCurrentWindow().label !== "main") return;
     let cancelled = false;
     getLaunchPath()
       .then((launchPath) => {

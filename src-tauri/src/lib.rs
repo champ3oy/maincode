@@ -3,11 +3,12 @@ mod menu;
 mod watcher;
 mod fs_ops;
 mod pty;
+#[cfg(target_os = "macos")]
+mod dock_menu;
 
 use git::AppState;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 
 static LAUNCH_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -23,22 +24,48 @@ fn get_launch_path() -> Option<String> {
     LAUNCH_PATH.get().map(|p| p.to_string_lossy().to_string())
 }
 
+/// The label of the currently focused window, falling back to `main`.
+fn focused_window_label(app: &tauri::AppHandle) -> String {
+    app.webview_windows()
+        .into_iter()
+        .find(|(_, w)| w.is_focused().unwrap_or(false))
+        .map(|(label, _)| label)
+        .unwrap_or_else(|| "main".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .menu(|handle| menu::build_menu(handle))
+        .setup(|_app| {
+            // Install the macOS Dock-menu "New Window" item. Runs on the main
+            // thread after the NSApplication delegate exists (both required).
+            #[cfg(target_os = "macos")]
+            dock_menu::install(_app.handle());
+            Ok(())
+        })
         .on_menu_event(|app, event| {
-            // Forward custom menu-item ids to the frontend; predefined items
-            // (copy/paste/quit/…) are handled natively.
-            let _ = app.emit("menu-action", event.id().0.as_str());
+            let id = event.id().0.as_str();
+            if id == "new-window" {
+                if let Err(e) = menu::open_new_window(app) {
+                    eprintln!("[maincode] failed to open new window: {e}");
+                }
+                return;
+            }
+            // Forward every other custom action to the focused window only, so
+            // Save / New File / Toggle Terminal act on the active window.
+            let label = focused_window_label(app);
+            let _ = app.emit_to(label.as_str(), "menu-action", id);
         })
-        .manage(AppState {
-            repo: Mutex::new(None),
-            watcher: Mutex::new(None),
-            watcher_generation: AtomicU64::new(0),
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let label = window.label().to_string();
+                window.state::<AppState>().remove_window(&label);
+            }
         })
+        .manage(AppState::default())
         .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
@@ -73,11 +100,10 @@ pub fn run() {
 
     app.run(move |app_handle, event| {
         if let tauri::RunEvent::Exit = event {
-            let state: &AppState = app_handle.state::<AppState>().inner();
-            // Drop the file watcher so the notify background thread exits.
-            if let Ok(mut guard) = state.watcher.lock() {
-                *guard = None;
-            }
+            let state: tauri::State<AppState> = app_handle.state::<AppState>();
+            if let Ok(mut map) = state.windows.lock() {
+                map.clear();
+            };
         }
     });
 }

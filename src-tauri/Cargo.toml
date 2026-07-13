@@ -28,6 +28,15 @@ notify = "8"
 notify-debouncer-full = "0.5"
 portable-pty = "0.9"
 
+# macOS-only native interop for the Dock-menu "New Window" item. These crates
+# are already in the tree (pulled in transitively by tauri/tao); listing them
+# here only makes them directly nameable and enables the NSMenu/NSMenuItem
+# features we need — it adds no new crates.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem"] }
+
 [dev-dependencies]
 tempfile = "3"
 

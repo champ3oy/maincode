@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
@@ -9,7 +9,7 @@ use git2::build::CheckoutBuilder;
 use git2::{BranchType, Index, Patch, Repository, Status, StatusOptions, Tree};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 // Temporary perf instrumentation. Emits perf:log events to the frontend and
 // also prints to stderr so logs show up in the terminal that launched the
@@ -29,118 +29,64 @@ fn ms_since(start: Instant) -> f64 {
     (d.as_secs_f64() * 1000.0 * 100.0).round() / 100.0
 }
 
-pub struct AppState {
+/// State for a single editor window: its open repository and file watcher.
+#[derive(Default)]
+pub struct WindowState {
     pub repo: Mutex<Option<Repository>>,
     pub watcher: Mutex<Option<crate::watcher::RepoWatcher>>,
     pub watcher_generation: AtomicU64,
 }
 
-fn restart_watcher(app: &AppHandle, state: &AppState, workdir: &Path) {
-    let generation = state.watcher_generation.fetch_add(1, Ordering::SeqCst) + 1;
+/// App-wide state: one `WindowState` per window, keyed by the window label.
+/// Each `WindowState` carries its own locks so a slow git op in one window
+/// never blocks another; the map lock is only held to look up (or create) the
+/// per-window `Arc`.
+#[derive(Default)]
+pub struct AppState {
+    pub windows: Mutex<HashMap<String, Arc<WindowState>>>,
+}
+
+impl AppState {
+    /// Get (or lazily create) the state for `label`.
+    pub fn window(&self, label: &str) -> Arc<WindowState> {
+        let mut map = self.windows.lock().expect("windows lock poisoned");
+        map.entry(label.to_string())
+            .or_insert_with(|| Arc::new(WindowState::default()))
+            .clone()
+    }
+
+    /// Drop a window's state (dropping its watcher). Called when a window closes.
+    pub fn remove_window(&self, label: &str) {
+        if let Ok(mut map) = self.windows.lock() {
+            map.remove(label);
+        }
+    }
+}
+
+fn restart_watcher(app: &AppHandle, ws: &Arc<WindowState>, label: &str, workdir: &Path) {
+    let generation = ws.watcher_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Ok(mut guard) = ws.watcher.lock() {
+        *guard = None;
+    }
+
     let workdir = workdir.to_path_buf();
-    let workdir_label = workdir.to_string_lossy().to_string();
-
-    let clear_start = Instant::now();
-    let clear_error = match state.watcher.lock() {
-        Ok(mut guard) => {
-            *guard = None;
-            None
-        }
-        Err(e) => Some(e.to_string()),
-    };
-    perf_event(
-        app,
-        "watcher:spawn",
-        json!({
-            "generation": generation,
-            "workdir": &workdir_label,
-            "clearMs": ms_since(clear_start),
-            "clearError": clear_error,
-        }),
-    );
-
     let app = app.clone();
-    let _ = thread::spawn(move || {
-        let start = Instant::now();
-        let result = crate::watcher::start(&workdir, app.clone());
-        let start_ms = ms_since(start);
-        let state = app.state::<AppState>();
-
-        if state.watcher_generation.load(Ordering::SeqCst) != generation {
-            perf_event(
-                &app,
-                "watcher:stale",
-                json!({
-                    "generation": generation,
-                    "workdir": &workdir_label,
-                    "startMs": start_ms,
-                }),
-            );
-            return;
-        }
-
-        match result {
-            Ok(watcher) => {
-                let lock_start = Instant::now();
-                match state.watcher.lock() {
-                    Ok(mut guard) => {
-                        if state.watcher_generation.load(Ordering::SeqCst) != generation {
-                            perf_event(
-                                &app,
-                                "watcher:stale",
-                                json!({
-                                    "generation": generation,
-                                    "workdir": &workdir_label,
-                                    "phase": "store",
-                                    "startMs": start_ms,
-                                    "lockMs": ms_since(lock_start),
-                                }),
-                            );
-                            return;
-                        }
-                        *guard = Some(watcher);
-                        perf_event(
-                            &app,
-                            "watcher:ready",
-                            json!({
-                                "generation": generation,
-                                "workdir": &workdir_label,
-                                "startMs": start_ms,
-                                "lockMs": ms_since(lock_start),
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        perf_event(
-                            &app,
-                            "watcher:error",
-                            json!({
-                                "generation": generation,
-                                "workdir": &workdir_label,
-                                "phase": "store",
-                                "startMs": start_ms,
-                                "lockMs": ms_since(lock_start),
-                                "error": e.to_string(),
-                            }),
-                        );
-                    }
+    let ws = ws.clone();
+    let label = label.to_string();
+    thread::spawn(move || match crate::watcher::start(&workdir, app, label) {
+        Ok(watcher) => {
+            // A newer open_repo for this window may have bumped the generation
+            // while we were starting; if so, discard this watcher.
+            if ws.watcher_generation.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if let Ok(mut guard) = ws.watcher.lock() {
+                if ws.watcher_generation.load(Ordering::SeqCst) == generation {
+                    *guard = Some(watcher);
                 }
             }
-            Err(e) => {
-                eprintln!("[maincode-watcher] failed to start: {e}");
-                perf_event(
-                    &app,
-                    "watcher:error",
-                    json!({
-                        "generation": generation,
-                        "workdir": &workdir_label,
-                        "phase": "start",
-                        "startMs": start_ms,
-                        "error": e,
-                    }),
-                );
-            }
         }
+        Err(e) => eprintln!("[maincode-watcher] failed to start: {e}"),
     });
 }
 
@@ -266,7 +212,13 @@ fn count_diff_lines_parallel(
 }
 
 #[tauri::command]
-pub fn open_repo(path: String, app: AppHandle, state: State<AppState>) -> Result<String, String> {
+pub fn open_repo(
+    path: String,
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<AppState>,
+) -> Result<String, String> {
+    let ws = state.window(window.label());
     let total_start = Instant::now();
     perf_event(&app, "open_repo:start", json!({ "path": &path }));
 
@@ -313,7 +265,7 @@ pub fn open_repo(path: String, app: AppHandle, state: State<AppState>) -> Result
     let workdir = workdir_path.to_string_lossy().to_string();
 
     let lock_start = Instant::now();
-    let mut guard = match state.repo.lock() {
+    let mut guard = match ws.repo.lock() {
         Ok(guard) => guard,
         Err(e) => {
             perf_event(
@@ -341,7 +293,7 @@ pub fn open_repo(path: String, app: AppHandle, state: State<AppState>) -> Result
     let state_set_ms = ms_since(state_set_start);
 
     let watcher_start = Instant::now();
-    restart_watcher(&app, state.inner(), &workdir_path);
+    restart_watcher(&app, &ws, window.label(), &workdir_path);
     let watcher_spawn_ms = ms_since(watcher_start);
 
     perf_event(
@@ -362,7 +314,12 @@ pub fn open_repo(path: String, app: AppHandle, state: State<AppState>) -> Result
 }
 
 #[tauri::command]
-pub fn get_repo_status(app: AppHandle, state: State<AppState>) -> Result<RepoStatus, String> {
+pub fn get_repo_status(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<AppState>,
+) -> Result<RepoStatus, String> {
+    let ws = state.window(window.label());
     let total_start = Instant::now();
     let (
         status_entries,
@@ -377,7 +334,7 @@ pub fn get_repo_status(app: AppHandle, state: State<AppState>) -> Result<RepoSta
         unstaged_count_ms,
     ) = {
         let lock_start = Instant::now();
-        let lock = state
+        let lock = ws
             .repo
             .lock()
             .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -679,12 +636,14 @@ fn read_index_file(
 pub fn get_file_contents_batch(
     requests: Vec<FileContentsRequest>,
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<AppState>,
 ) -> Result<Vec<FileContentsBatchItem>, String> {
+    let ws = state.window(window.label());
     let total_start = Instant::now();
     let requested_count = requests.len();
     let lock_start = Instant::now();
-    let lock = state
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -974,8 +933,13 @@ fn collect_paths(repo: &Repository, flags: Status) -> Result<Vec<String>, String
 }
 
 #[tauri::command]
-pub fn stage_file(path: String, state: State<AppState>) -> Result<(), String> {
-    let lock = state
+pub fn stage_file(
+    path: String,
+    window: tauri::WebviewWindow,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let ws = state.window(window.label());
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -985,8 +949,9 @@ pub fn stage_file(path: String, state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn stage_all(state: State<AppState>) -> Result<(), String> {
-    let lock = state
+pub fn stage_all(window: tauri::WebviewWindow, state: State<AppState>) -> Result<(), String> {
+    let ws = state.window(window.label());
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -1021,8 +986,13 @@ pub fn stage_all(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn unstage_file(path: String, state: State<AppState>) -> Result<(), String> {
-    let lock = state
+pub fn unstage_file(
+    path: String,
+    window: tauri::WebviewWindow,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let ws = state.window(window.label());
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -1032,8 +1002,9 @@ pub fn unstage_file(path: String, state: State<AppState>) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn unstage_all(state: State<AppState>) -> Result<(), String> {
-    let lock = state
+pub fn unstage_all(window: tauri::WebviewWindow, state: State<AppState>) -> Result<(), String> {
+    let ws = state.window(window.label());
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -1054,8 +1025,13 @@ pub fn unstage_all(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn discard_file(path: String, state: State<AppState>) -> Result<(), String> {
-    let lock = state
+pub fn discard_file(
+    path: String,
+    window: tauri::WebviewWindow,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let ws = state.window(window.label());
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -1175,9 +1151,11 @@ fn canonical_contained_target(workdir: &Path, relative_path: &Path) -> Result<Pa
 pub fn commit(
     message: String,
     amend: Option<bool>,
+    window: tauri::WebviewWindow,
     state: State<AppState>,
 ) -> Result<String, String> {
-    let lock = state
+    let ws = state.window(window.label());
+    let lock = ws
         .repo
         .lock()
         .map_err(|e| format!("lock poisoned: {e}"))?;
@@ -1272,8 +1250,12 @@ pub struct BranchInfo {
 /// tip cannot be resolved fall to the bottom.
 /// `is_current` is true for the branch HEAD currently points at (if any).
 #[tauri::command]
-pub fn list_branches(state: State<AppState>) -> Result<Vec<BranchInfo>, String> {
-    let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+pub fn list_branches(
+    window: tauri::WebviewWindow,
+    state: State<AppState>,
+) -> Result<Vec<BranchInfo>, String> {
+    let ws = state.window(window.label());
+    let lock = ws.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let repo = lock.as_ref().ok_or("no repository open")?;
     let head_name = repo
         .head()
@@ -1306,9 +1288,11 @@ pub fn list_branches(state: State<AppState>) -> Result<Vec<BranchInfo>, String> 
 pub fn checkout_branch(
     name: String,
     app: AppHandle,
+    window: tauri::WebviewWindow,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let lock = state.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
+    let ws = state.window(window.label());
+    let lock = ws.repo.lock().map_err(|e| format!("lock poisoned: {e}"))?;
     let repo = lock.as_ref().ok_or("no repository open")?;
 
     // Force a fresh read of `.git/index` into the cached in-memory index before
@@ -1423,7 +1407,7 @@ pub fn checkout_branch(
 
     // Branch switches do not always trigger fs events the watcher notices in
     // time, so kick a refresh explicitly.
-    let _ = app.emit("repo:changed", json!({}));
+    let _ = app.emit_to(window.label(), "repo:changed", json!({}));
     Ok(())
 }
 
@@ -1453,5 +1437,24 @@ mod tests {
         push_patch_line(&mut patch, '+', b"new\n");
 
         assert_eq!(patch, "@@ -1,2 +1,2 @@\n same\n-old\n+new\n");
+    }
+
+    #[test]
+    fn window_state_is_isolated_per_label() {
+        use std::sync::Arc;
+        let state = super::AppState::default();
+        let a = state.window("main");
+        let b = state.window("w-1");
+        assert!(!Arc::ptr_eq(&a, &b), "different labels must get different state");
+        assert!(Arc::ptr_eq(&a, &state.window("main")), "same label returns same state");
+        state.remove_window("main");
+        assert!(
+            !Arc::ptr_eq(&a, &state.window("main")),
+            "a removed label yields fresh state on next access"
+        );
+        assert!(
+            Arc::ptr_eq(&b, &state.window("w-1")),
+            "removing one label does not disturb another"
+        );
     }
 }
