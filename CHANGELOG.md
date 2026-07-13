@@ -10,6 +10,8 @@ entries under a new version heading.
 
 ### Added
 - Terminal: URLs are now **clickable** and open in your default browser.
+- Terminal: enabled the **kitty keyboard protocol** (xterm.js 6.1 upgrade), so
+  modified keys like **Shift+Enter** work in TUI apps that negotiate it.
 - Native multi-window support — open multiple projects at once, each window fully
   independent (file tree, git, terminals). New Window via **File → New Window**
   (⇧⌘N) and the macOS **Dock menu**, which also lists open windows to switch
@@ -17,9 +19,6 @@ entries under a new version heading.
   ([#1](https://github.com/champ3oy/maincode/pull/1))
 
 ### Fixed
-- Terminal: **Shift+Enter** now inserts a newline (and all modified keys work)
-  in apps that use the kitty keyboard protocol, e.g. `claude` — via the
-  xterm.js 6.1 upgrade.
 - New windows were missing capabilities, so dragging, IPC, events, and dialogs
   were denied in them. ([#1](https://github.com/champ3oy/maincode/pull/1))
 
