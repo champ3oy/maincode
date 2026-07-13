@@ -15,7 +15,7 @@ pub struct RepoWatcher {
 /// Start a recursive watch on `workdir`. Worktree changes and status-relevant
 /// `.git` changes are coalesced with a 300 ms debounce and emit a single
 /// `repo:changed` Tauri event to the frontend.
-pub fn start(workdir: &Path, app: AppHandle) -> Result<RepoWatcher, String> {
+pub fn start(workdir: &Path, app: AppHandle, label: String) -> Result<RepoWatcher, String> {
     // We only need a "repo changed" trigger. The default macOS/Windows cache
     // walks the entire recursive tree to collect file IDs before watch() returns.
     let mut debouncer: Debouncer<RecommendedWatcher, NoCache> = new_debouncer_opt(
@@ -27,7 +27,7 @@ pub fn start(workdir: &Path, app: AppHandle) -> Result<RepoWatcher, String> {
                     .iter()
                     .any(|ev| ev.event.paths.iter().any(|p| path_is_relevant(p)));
                 if relevant {
-                    let _ = app.emit("repo:changed", ());
+                    let _ = app.emit_to(label.as_str(), "repo:changed", ());
                 }
             }
             Err(errors) => {

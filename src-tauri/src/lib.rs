@@ -6,8 +6,7 @@ mod pty;
 
 use git::AppState;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 
 static LAUNCH_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -34,11 +33,7 @@ pub fn run() {
             // (copy/paste/quit/…) are handled natively.
             let _ = app.emit("menu-action", event.id().0.as_str());
         })
-        .manage(AppState {
-            repo: Mutex::new(None),
-            watcher: Mutex::new(None),
-            watcher_generation: AtomicU64::new(0),
-        })
+        .manage(AppState::default())
         .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
@@ -73,11 +68,10 @@ pub fn run() {
 
     app.run(move |app_handle, event| {
         if let tauri::RunEvent::Exit = event {
-            let state: &AppState = app_handle.state::<AppState>().inner();
-            // Drop the file watcher so the notify background thread exits.
-            if let Ok(mut guard) = state.watcher.lock() {
-                *guard = None;
-            }
+            let state: tauri::State<AppState> = app_handle.state::<AppState>();
+            if let Ok(mut map) = state.windows.lock() {
+                map.clear();
+            };
         }
     });
 }
