@@ -89,7 +89,7 @@ describe("mergeSettings", () => {
   it("handles completely valid full settings object", () => {
     const full = {
       theme: "dark",
-      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false, formatOnSave: true },
+      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false, formatOnSave: true, typescript: false },
       terminal: { fontSize: 14 },
       diff: { fontSize: 15, fontFamily: "system-mono", wordWrap: true },
     };
@@ -132,5 +132,11 @@ describe("mergeSettings", () => {
     expect(mergeSettings({ diff: { fontFamily: "comic-sans" } }).diff.fontFamily).toBe(
       DEFAULT_SETTINGS.diff.fontFamily,
     );
+  });
+
+  it("defaults editor.typescript to true and type-guards it", () => {
+    expect(mergeSettings({}).editor.typescript).toBe(true);
+    expect(mergeSettings({ editor: { typescript: false } }).editor.typescript).toBe(false);
+    expect(mergeSettings({ editor: { typescript: "x" } }).editor.typescript).toBe(true);
   });
 });

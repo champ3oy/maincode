@@ -57,6 +57,7 @@ import {
   type PaletteCommand,
 } from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
+import { tsClient } from "@/lib/ts-worker/client";
 
 function App() {
   const { rootPath, rootName, openFolder, closeFolder } = useWorkspace();
@@ -87,6 +88,15 @@ function App() {
   useEffect(() => {
     setFormatRoot(rootPath);
   }, [rootPath, setFormatRoot]);
+
+  // Open/close the TypeScript project with the workspace (worker is lazy).
+  useEffect(() => {
+    if (rootPath && settings.editor.typescript) {
+      void tsClient().openProject(rootPath).catch(() => {});
+    } else {
+      tsClient().closeProject();
+    }
+  }, [rootPath, settings.editor.typescript]);
 
   function clampFontSize(size: number): number {
     return Math.min(32, Math.max(8, Math.round(size)));

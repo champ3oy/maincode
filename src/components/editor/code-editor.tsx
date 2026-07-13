@@ -80,7 +80,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -114,6 +114,9 @@ export function CodeEditor({
   const lintingRef = useRef(linting);
   lintingRef.current = linting;
   const lintCompartment = useRef(new Compartment());
+
+  const typescriptRef = useRef(typescript);
+  typescriptRef.current = typescript;
 
   // TS worker extensions — built once; each self-gates on isTsWorkerPath + ready().
   const tsExtensions = useRef({
@@ -217,14 +220,19 @@ export function CodeEditor({
         ]),
         wrapCompartment.current.of(wordWrapRef.current ? EditorView.lineWrapping : []),
         completionCompartment.current.of(
-          completionExtensions(autocompleteRef.current, { source: tsExtensions.current.source }),
+          completionExtensions(
+            autocompleteRef.current,
+            typescriptRef.current ? { source: tsExtensions.current.source } : undefined,
+          ),
         ),
         lintCompartment.current.of(
-          lintExtensions(lintingRef.current, languageKeyForPath(docPath), {
-            linter: tsExtensions.current.linter,
-            hover: tsExtensions.current.hover,
-            kind: tsKindForPath(docPath),
-          }),
+          lintExtensions(
+            lintingRef.current,
+            languageKeyForPath(docPath),
+            typescriptRef.current
+              ? { linter: tsExtensions.current.linter, hover: tsExtensions.current.hover, kind: tsKindForPath(docPath) }
+              : undefined,
+          ),
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -340,31 +348,37 @@ export function CodeEditor({
 
   // Apply autocomplete live; path dep ensures JSON-specific linter is correct
   // after tab swaps (lint compartment depends on languageKey for JSON linter).
+  // typescript dep ensures TS sources are added/removed when the toggle changes.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: completionCompartment.current.reconfigure(
-        completionExtensions(autocomplete, { source: tsExtensions.current.source }),
+        completionExtensions(
+          autocomplete,
+          typescript ? { source: tsExtensions.current.source } : undefined,
+        ),
       ),
     });
-  }, [autocomplete, path]);
+  }, [autocomplete, typescript, path]);
 
   // Apply linting live; path dep recomputes languageKey so JSON docs get the
-  // JSON linter after tab swaps.
+  // JSON linter after tab swaps. typescript dep gates TS diagnostic sources.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: lintCompartment.current.reconfigure(
-        lintExtensions(linting, languageKeyForPath(path), {
-          linter: tsExtensions.current.linter,
-          hover: tsExtensions.current.hover,
-          kind: tsKindForPath(path),
-        }),
+        lintExtensions(
+          linting,
+          languageKeyForPath(path),
+          typescript
+            ? { linter: tsExtensions.current.linter, hover: tsExtensions.current.hover, kind: tsKindForPath(path) }
+            : undefined,
+        ),
       ),
     });
-  }, [linting, path]);
+  }, [linting, typescript, path]);
 
   // When the TS worker loads new types (e.g., node_modules/@types), force the
   // lint compartment to re-run so diagnostics reflect the updated type info.
