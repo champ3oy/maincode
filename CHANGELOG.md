@@ -9,6 +9,11 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- Editor: **image viewer** — opening an image file (png, jpg, jpeg, gif, svg,
+  webp, bmp, ico, avif) now renders it read-only in the editor instead of the
+  "Cannot open a binary file" toast. Images are displayed fit-to-view with a
+  checkerboard backdrop and a footer showing filename and natural dimensions.
+  Files larger than 25 MB show a friendly error rather than loading.
 - Editor: **Find & Replace** redesigned as a VS Code-style floating widget in the
   top-right — match count, case / whole-word / regex toggles, prev/next, and an
   expandable replace row (⌘F find, ⌘⌥F replace, Esc to close).

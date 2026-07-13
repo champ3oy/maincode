@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -224,6 +225,22 @@ pub fn delete_path(path: String) -> Result<(), String> {
     delete_path_inner(Path::new(&path))
 }
 
+const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+
+pub fn read_image_base64_inner(path: &Path) -> Result<String, String> {
+    let meta = fs::metadata(path).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_IMAGE_BYTES {
+        return Err("too_large".into());
+    }
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    Ok(STANDARD.encode(&bytes))
+}
+
+#[tauri::command]
+pub fn read_image_base64(path: String) -> Result<String, String> {
+    read_image_base64_inner(Path::new(&path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +354,28 @@ mod tests {
         assert_eq!(files, vec!["src/deep/a.rs", "top.txt"]);
         let capped = list_files_inner(tmp.path(), 1);
         assert_eq!(capped.len(), 1);
+    }
+
+    #[test]
+    fn read_image_base64_roundtrip_and_size_limit() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Small file: encode then decode back to original bytes.
+        let p = tmp.path().join("img.png");
+        let original = vec![137u8, 80, 78, 71, 13, 10, 26, 10]; // PNG magic bytes
+        fs::write(&p, &original).unwrap();
+        let b64 = read_image_base64_inner(&p).unwrap();
+        assert!(!b64.is_empty());
+        let decoded = STANDARD.decode(&b64).unwrap();
+        assert_eq!(decoded, original);
+
+        // File exceeding 25 MB limit returns Err("too_large").
+        let big = tmp.path().join("big.bin");
+        fs::write(&big, vec![0u8; (MAX_IMAGE_BYTES + 1) as usize]).unwrap();
+        let err = read_image_base64_inner(&big).unwrap_err();
+        assert_eq!(err, "too_large");
     }
 
     #[test]

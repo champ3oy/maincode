@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { useEditor } from "@/hooks/use-editor";
+import { isImagePath } from "@/lib/image";
 import { CodeEditor } from "./code-editor";
+import { ImageViewer } from "./image-viewer";
 import { TabBar } from "./tab-bar";
 
 interface EditorAreaProps {
@@ -61,13 +63,17 @@ export function EditorArea({ onCursor }: EditorAreaProps) {
       />
       {activeTab ? (
         <div className="min-h-0 flex-1">
-          <CodeEditor
-            path={activeTab.path}
-            content={activeTab.content}
-            onChange={editFile}
-            onSave={(path) => void saveFile(path)}
-            onCursor={onCursor}
-          />
+          {isImagePath(activeTab.path) ? (
+            <ImageViewer path={activeTab.path} />
+          ) : (
+            <CodeEditor
+              path={activeTab.path}
+              content={activeTab.content}
+              onChange={editFile}
+              onSave={(path) => void saveFile(path)}
+              onCursor={onCursor}
+            />
+          )}
         </div>
       ) : (
         <div className="flex flex-1 items-center justify-center">
