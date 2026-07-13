@@ -1,6 +1,13 @@
 import { type Completion, type CompletionResult, type CompletionSource } from "@codemirror/autocomplete";
 import { linter, type Diagnostic } from "@codemirror/lint";
-import { hoverTooltip, type Extension } from "@codemirror/view";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  ViewPlugin,
+  hoverTooltip,
+  type Extension,
+} from "@codemirror/view";
 import { isTsWorkerPath, tsClient } from "./client";
 import type { CompletionItemData } from "./protocol";
 
@@ -88,6 +95,132 @@ export function tsLinterExtension(getPath: () => string): Extension {
     },
     { delay: 250 },
   );
+}
+
+/**
+ * VS Code-style Cmd/Ctrl-hover affordance for go-to-definition. While the user
+ * holds Cmd (metaKey; Ctrl on non-mac) and hovers an identifier in a TS/JS file,
+ * the hovered word is underlined and the cursor becomes a pointer — signalling
+ * it's clickable (the existing Cmd+Click mousedown handler does the navigation).
+ *
+ * Self-gates on the caller's `enabled()` (settings.editor.typescript) plus
+ * `isTsWorkerPath(path)`. It only ever adds a passive mark decoration + cursor
+ * style; it never calls preventDefault or dispatches selection changes, so it
+ * cannot interfere with Cmd+Click go-to-def or with normal text selection when
+ * Cmd isn't held.
+ */
+const cmdHoverMark = Decoration.mark({
+  class: "cm-cmd-hover-link",
+  attributes: { style: "text-decoration: underline; cursor: pointer;" },
+});
+
+const cmdHoverTheme = EditorView.theme({
+  ".cm-cmd-hover-active .cm-scroller": { cursor: "pointer" },
+});
+
+export function tsGoToDefHoverAffordance(
+  getPath: () => string,
+  enabled: () => boolean,
+): Extension {
+  const active = (): boolean => enabled() && isTsWorkerPath(getPath());
+
+  const plugin = ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet = Decoration.none;
+      // Whether the meta/ctrl modifier is currently held.
+      private meta = false;
+      // Last known mouse coordinates, so a keydown (with no fresh mouse event)
+      // can still resolve the word currently under the pointer.
+      private lastX = -1;
+      private lastY = -1;
+
+      constructor(readonly view: EditorView) {}
+
+      /** Recompute the underlined word from the current meta state + mouse pos. */
+      update() {
+        if (!this.meta || !active() || this.lastX < 0) {
+          this.setDeco(Decoration.none);
+          return;
+        }
+        const pos = this.view.posAtCoords({ x: this.lastX, y: this.lastY });
+        if (pos == null) {
+          this.setDeco(Decoration.none);
+          return;
+        }
+        const word = this.view.state.wordAt(pos);
+        if (!word || word.from === word.to) {
+          this.setDeco(Decoration.none);
+          return;
+        }
+        this.setDeco(Decoration.set([cmdHoverMark.range(word.from, word.to)]));
+      }
+
+      // The from/to of the currently marked word, so we can skip redundant
+      // dispatches while the pointer moves within the same identifier.
+      private markedFrom = -1;
+      private markedTo = -1;
+
+      private setDeco(deco: DecorationSet) {
+        let from = -1;
+        let to = -1;
+        if (deco !== Decoration.none) {
+          const it = deco.iter();
+          from = it.from;
+          to = it.to;
+        }
+        // No change (same word range, or still nothing) → nothing to do. This
+        // keeps mousemove from dispatching a transaction on every pixel.
+        if (from === this.markedFrom && to === this.markedTo) return;
+        this.markedFrom = from;
+        this.markedTo = to;
+        this.decorations = deco;
+        if (deco !== Decoration.none) this.view.scrollDOM.classList.add("cm-cmd-hover-active");
+        else this.view.scrollDOM.classList.remove("cm-cmd-hover-active");
+        // Empty transaction: forces the view to re-read `decorations`.
+        this.view.dispatch({});
+      }
+
+      onMouseMove(e: MouseEvent) {
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
+        this.meta = e.metaKey || e.ctrlKey;
+        this.update();
+      }
+      onKey(e: KeyboardEvent) {
+        this.meta = e.metaKey || e.ctrlKey;
+        this.update();
+      }
+      onLeave() {
+        this.meta = false;
+        this.lastX = -1;
+        this.lastY = -1;
+        this.setDeco(Decoration.none);
+      }
+
+      destroy() {
+        this.view.scrollDOM.classList.remove("cm-cmd-hover-active");
+      }
+    },
+    {
+      decorations: (v) => v.decorations,
+      eventHandlers: {
+        mousemove(e) {
+          this.onMouseMove(e);
+        },
+        mouseleave() {
+          this.onLeave();
+        },
+        keydown(e) {
+          this.onKey(e);
+        },
+        keyup(e) {
+          this.onKey(e);
+        },
+      },
+    },
+  );
+
+  return [plugin, cmdHoverTheme];
 }
 
 export function tsHoverExtension(getPath: () => string): Extension {

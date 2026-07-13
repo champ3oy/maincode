@@ -5,7 +5,6 @@ import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
-import { forceLinting } from "@codemirror/lint";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { baseSetup, completionExtensions, lintExtensions } from "@/lib/cm-setup";
@@ -15,7 +14,12 @@ import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
 import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
-import { tsCompletionSource, tsLinterExtension, tsHoverExtension } from "@/lib/ts-worker/cm";
+import {
+  tsCompletionSource,
+  tsLinterExtension,
+  tsHoverExtension,
+  tsGoToDefHoverAffordance,
+} from "@/lib/ts-worker/cm";
 import { scriptKindForPath } from "@/lib/ts-worker/mapping";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 import { FindWidget } from "./find-widget";
@@ -142,11 +146,11 @@ export function CodeEditor({
   const onRevealConsumedRef = useRef(onRevealConsumed);
   onRevealConsumedRef.current = onRevealConsumed;
 
-  // TS worker extensions — built once; each self-gates on isTsWorkerPath + ready().
+  // TS completion source — built once; self-gates on isTsWorkerPath + ready().
+  // The lint/hover extensions are built fresh per lint-compartment build (see
+  // buildLintExtensions) so a reconfigure installs a new linter() that re-runs.
   const tsExtensions = useRef({
     source: tsCompletionSource(() => pathRef.current),
-    linter: tsLinterExtension(() => pathRef.current),
-    hover: tsHoverExtension(() => pathRef.current),
   });
 
   /** Returns "ts" for .ts/.tsx/.mts/.cts, "js" for everything else with a TS worker path. */
@@ -154,6 +158,30 @@ export function CodeEditor({
     const k = scriptKindForPath(p);
     return k === "ts" || k === "tsx" ? "ts" : "js";
   }
+
+  // Single source of truth for the lint compartment's contents. Both makeState
+  // and the live-reconfigure paths (settings effect, onTypesUpdated) build
+  // identical config through here so a compartment reconfigure never diverges
+  // from the initial state. `linting`/`typescript` are passed explicitly so
+  // effects can hand in the reactive values while makeState hands in the refs.
+  const buildLintExtensions = useRef(
+    (docPath: string, lintingEnabled: boolean, tsEnabled: boolean) =>
+      lintExtensions(
+        lintingEnabled,
+        languageKeyForPath(docPath),
+        tsEnabled
+          ? {
+              // Fresh linter/hover instances per build: reconfiguring the lint
+              // compartment with a brand-new linter() forces CodeMirror to tear
+              // down the idle lint plugin and run a fresh lint. Reusing the same
+              // instances would not — see lint-refresh.test.ts.
+              linter: tsLinterExtension(() => pathRef.current),
+              hover: tsHoverExtension(() => pathRef.current),
+              kind: tsKindForPath(docPath),
+            }
+          : undefined,
+      ),
+  );
 
   // Search state + handlers from the hook.
   const [searchState, searchHandlers] = useEditorSearch(viewRef);
@@ -250,13 +278,7 @@ export function CodeEditor({
           ),
         ),
         lintCompartment.current.of(
-          lintExtensions(
-            lintingRef.current,
-            languageKeyForPath(docPath),
-            typescriptRef.current
-              ? { linter: tsExtensions.current.linter, hover: tsExtensions.current.hover, kind: tsKindForPath(docPath) }
-              : undefined,
-          ),
+          buildLintExtensions.current(docPath, lintingRef.current, typescriptRef.current),
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -302,6 +324,15 @@ export function CodeEditor({
             return true;
           },
         }),
+        // Cmd/Ctrl-hover affordance: underlines the hovered identifier + shows a
+        // pointer while the modifier is held, so Cmd+Click go-to-def is
+        // discoverable. Self-gates on typescript + isTsWorkerPath; purely visual,
+        // never preventDefaults, so it never interferes with the mousedown
+        // handler above or normal selection.
+        tsGoToDefHoverAffordance(
+          () => pathRef.current,
+          () => typescriptRef.current,
+        ),
       ],
     });
   });
@@ -416,24 +447,26 @@ export function CodeEditor({
     if (!view) return;
     view.dispatch({
       effects: lintCompartment.current.reconfigure(
-        lintExtensions(
-          linting,
-          languageKeyForPath(path),
-          typescript
-            ? { linter: tsExtensions.current.linter, hover: tsExtensions.current.hover, kind: tsKindForPath(path) }
-            : undefined,
-        ),
+        buildLintExtensions.current(path, linting, typescript),
       ),
     });
   }, [linting, typescript, path]);
 
   // When the TS worker loads new types (e.g., node_modules/@types), re-run the
-  // linter so diagnostics reflect the updated type info. Warm-up fires many
-  // `typesUpdated` events (one per resolution round); forcing a lint on each
-  // would start overlapping async getDiagnostics whose out-of-order results let
-  // an intermediate (still-erroring) snapshot win — leaving stale red until the
-  // user switches files. Debounce so the burst collapses into ONE re-lint after
-  // types settle, which queries the final, converged (clean) diagnostics.
+  // linter so diagnostics reflect the updated type info.
+  //
+  // We RECONFIGURE the lint compartment with a freshly-built lint extension
+  // rather than calling forceLinting(view). forceLinting is a no-op once the
+  // editor is idle: CodeMirror's lint plugin only forces a run when a lint is
+  // already scheduled (`this.set === true`), and after the initial lint applies
+  // with no subsequent doc change nothing re-schedules one. So the stale
+  // "Cannot find module" errors on the first-opened file never cleared until a
+  // tab switch rebuilt the state. Installing a NEW linter() instance tears down
+  // the idle lint plugin and runs a fresh lint against the converged (clean)
+  // diagnostics. Proven in lint-refresh.test.ts.
+  //
+  // Warm-up fires many `typesUpdated` events (one per resolution round); debounce
+  // so the burst collapses into ONE reconfigure after types settle.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = tsClient().onTypesUpdated(() => {
@@ -442,7 +475,16 @@ export function CodeEditor({
       timer = setTimeout(() => {
         timer = null;
         const view = viewRef.current;
-        if (view) forceLinting(view);
+        if (!view) return;
+        view.dispatch({
+          effects: lintCompartment.current.reconfigure(
+            buildLintExtensions.current(
+              pathRef.current,
+              lintingRef.current,
+              typescriptRef.current,
+            ),
+          ),
+        });
       }, 300);
     });
     return () => {
