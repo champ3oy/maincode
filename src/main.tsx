@@ -17,6 +17,7 @@ import { RecentReposProvider } from "@/hooks/use-recent-repos";
 import { WorkspaceProvider } from "@/hooks/use-workspace";
 import { EditorProvider } from "@/hooks/use-editor";
 import { EditorFontProvider } from "@/hooks/use-editor-font";
+import { SettingsProvider } from "@/hooks/use-settings";
 
 // next-themes ships d.ts that loses `children` under React 19's namespace
 // resolution; re-type the provider so JSX accepts children.
@@ -94,19 +95,21 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       poolOptions={poolOptions}
       highlighterOptions={highlighterOptions}
     >
-      <ThemeProvider attribute="class" defaultTheme="system">
-        <DiffSettingsProvider>
-          <RecentReposProvider>
-            <WorkspaceProvider>
-              <EditorProvider>
-                <EditorFontProvider>
-                  <App />
-                </EditorFontProvider>
-              </EditorProvider>
-            </WorkspaceProvider>
-          </RecentReposProvider>
-        </DiffSettingsProvider>
-      </ThemeProvider>
+      <SettingsProvider>
+        <ThemeProvider attribute="class" defaultTheme="system">
+          <DiffSettingsProvider>
+            <RecentReposProvider>
+              <WorkspaceProvider>
+                <EditorProvider>
+                  <EditorFontProvider>
+                    <App />
+                  </EditorFontProvider>
+                </EditorProvider>
+              </WorkspaceProvider>
+            </RecentReposProvider>
+          </DiffSettingsProvider>
+        </ThemeProvider>
+      </SettingsProvider>
     </WorkerPoolContextProvider>
   </React.StrictMode>,
 );
