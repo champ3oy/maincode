@@ -24,6 +24,7 @@ import { Welcome } from "@/components/welcome/welcome";
 import { useRepoStatus } from "@/hooks/use-repo-status";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
 import { readLastFolder, useWorkspace } from "@/hooks/use-workspace";
+import { useEditorFont } from "@/hooks/use-editor-font";
 import {
   getLaunchPath,
   getRepoBranch,
@@ -70,6 +71,11 @@ function App() {
     isDirty,
   } = useEditor();
   const { addRecent } = useRecentRepos();
+  const {
+    increase: fontIncrease,
+    decrease: fontDecrease,
+    reset: fontReset,
+  } = useEditorFont();
   const { setTheme } = useTheme();
   const [gitAvailable, setGitAvailable] = useState(false);
   const [gitPending, setGitPending] = useState(false);
@@ -309,6 +315,15 @@ function App() {
         break;
       case "toggle-terminal":
         setShowTerminal((v) => !v);
+        break;
+      case "font-increase":
+        fontIncrease();
+        break;
+      case "font-decrease":
+        fontDecrease();
+        break;
+      case "font-reset":
+        fontReset();
         break;
     }
   };

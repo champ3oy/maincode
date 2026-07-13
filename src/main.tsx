@@ -16,6 +16,7 @@ import { DiffSettingsProvider } from "@/hooks/use-diff-settings";
 import { RecentReposProvider } from "@/hooks/use-recent-repos";
 import { WorkspaceProvider } from "@/hooks/use-workspace";
 import { EditorProvider } from "@/hooks/use-editor";
+import { EditorFontProvider } from "@/hooks/use-editor-font";
 
 // next-themes ships d.ts that loses `children` under React 19's namespace
 // resolution; re-type the provider so JSX accepts children.
@@ -98,7 +99,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
           <RecentReposProvider>
             <WorkspaceProvider>
               <EditorProvider>
-                <App />
+                <EditorFontProvider>
+                  <App />
+                </EditorFontProvider>
               </EditorProvider>
             </WorkspaceProvider>
           </RecentReposProvider>

@@ -73,9 +73,22 @@ pub fn build_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let toggle_terminal = MenuItemBuilder::with_id("toggle-terminal", "Toggle Terminal")
         .accelerator("Ctrl+`")
         .build(app)?;
+    let font_increase = MenuItemBuilder::with_id("font-increase", "Increase Font Size")
+        .accelerator("CmdOrCtrl+=")
+        .build(app)?;
+    let font_decrease = MenuItemBuilder::with_id("font-decrease", "Decrease Font Size")
+        .accelerator("CmdOrCtrl+-")
+        .build(app)?;
+    let font_reset = MenuItemBuilder::with_id("font-reset", "Reset Font Size")
+        .accelerator("CmdOrCtrl+0")
+        .build(app)?;
     let view_menu = SubmenuBuilder::new(app, "View")
         .item(&command_palette)
         .item(&search_files)
+        .separator()
+        .item(&font_increase)
+        .item(&font_decrease)
+        .item(&font_reset)
         .separator()
         .item(&toggle_terminal)
         .build()?;
