@@ -22,6 +22,10 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
       fontSize: 12,
       fontFamily: '"App Mono", ui-monospace, monospace',
       cursorBlink: true,
+      // Enable the kitty keyboard protocol (off by default in xterm.js 6.1) so
+      // apps that negotiate it (e.g. Claude Code) get a distinct Shift+Enter and
+      // all other modified keys, instead of Shift+Enter reading as plain Enter.
+      vtExtensions: { kittyKeyboard: true },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
