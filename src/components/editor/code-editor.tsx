@@ -16,6 +16,7 @@ import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
 import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
 import { tsCompletionSource, tsLinterExtension, tsHoverExtension } from "@/lib/ts-worker/cm";
+import { scriptKindForPath } from "@/lib/ts-worker/mapping";
 import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -121,9 +122,10 @@ export function CodeEditor({
     hover: tsHoverExtension(() => pathRef.current),
   });
 
-  /** Returns "ts" for .ts/.tsx, "js" for everything else that has a TS worker path. */
+  /** Returns "ts" for .ts/.tsx/.mts/.cts, "js" for everything else with a TS worker path. */
   function tsKindForPath(p: string): "ts" | "js" {
-    return /\.(ts|tsx)$/i.test(p) ? "ts" : "js";
+    const k = scriptKindForPath(p);
+    return k === "ts" || k === "tsx" ? "ts" : "js";
   }
 
   // Search state + handlers from the hook.

@@ -30,6 +30,13 @@ describe("scriptKindForPath", () => {
     expect(scriptKindForPath("/a/b.mjs")).toBe("js");
     expect(scriptKindForPath("/a/b.css")).toBe("other");
   });
+  it("maps .mts and .cts to ts (used by tsKindForPath in code-editor)", () => {
+    expect(scriptKindForPath("/a/b.mts")).toBe("ts");
+    expect(scriptKindForPath("/a/b.cts")).toBe("ts");
+  });
+  it("maps .json to other so isTsWorkerPath returns false for json files", () => {
+    expect(scriptKindForPath("/a/b.json")).toBe("other");
+  });
 });
 
 describe("mapCompilerOptions", () => {

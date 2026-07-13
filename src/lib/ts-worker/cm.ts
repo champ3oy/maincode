@@ -23,12 +23,26 @@ function toCompletion(item: CompletionItemData, path: string, offset: number): C
   if (item.source) {
     // auto-import entry: on apply, insert the label AND the import edits.
     c.apply = (view, _completion, from, to) => {
-      view.dispatch({ changes: { from, to, insert: item.insertText ?? item.label } });
+      // Build the change set first so we can use it for position mapping later.
+      const labelChange = view.state.changes({ from, to, insert: item.insertText ?? item.label });
+      view.dispatch({ changes: labelChange });
+      const docAfterLabel = view.state.doc;
       void tsClient()
         .getCompletionDetails(path, offset, item)
         .then((details) => {
           if (!details || details.extraChanges.length === 0) return;
-          view.dispatch({ changes: details.extraChanges });
+          // If the user typed between accepting the completion and the worker
+          // responding, the doc has moved on. Drop the import edits rather than
+          // applying stale offsets that could corrupt the document.
+          if (view.state.doc !== docAfterLabel) return;
+          // Map each extraChange through the label insertion so the positions
+          // stay valid relative to the document after the label was inserted.
+          const mapped = details.extraChanges.map((c) => ({
+            from: labelChange.mapPos(c.from, 1),
+            to: labelChange.mapPos(c.to, 1),
+            insert: c.insert,
+          }));
+          view.dispatch({ changes: mapped });
         });
     };
   } else if (item.insertText) {

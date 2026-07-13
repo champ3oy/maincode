@@ -1,11 +1,11 @@
 # Maincode
 
-A simple code editor without the bloatware.
+A simple lightweight code editor without the bloatware.
 
 Built on Tauri v2 + React + CodeMirror 6,
 derived from [cub.dev](https://github.com/ephraimduncan/cub.dev).
 
-Download [Latest Release](https://github.com/champ3oy/maincode/releases)
+Download [Latest Release](https://code.cirlorm.dev)
 
 ![Maincode](docs/screenshot.png)
 
