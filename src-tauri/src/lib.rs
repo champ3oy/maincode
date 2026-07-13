@@ -3,6 +3,7 @@ mod menu;
 mod watcher;
 mod fs_ops;
 mod pty;
+mod settings;
 #[cfg(target_os = "macos")]
 mod dock_menu;
 
@@ -95,6 +96,9 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            settings::read_settings,
+            settings::write_settings,
+            settings::settings_path,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
