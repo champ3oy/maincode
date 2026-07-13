@@ -5,6 +5,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
+import { forceLinting } from "@codemirror/lint";
 import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { baseSetup, completionExtensions, lintExtensions } from "@/lib/cm-setup";
@@ -13,6 +14,8 @@ import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
+import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
+import { tsCompletionSource, tsLinterExtension, tsHoverExtension } from "@/lib/ts-worker/cm";
 import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -111,6 +114,18 @@ export function CodeEditor({
   lintingRef.current = linting;
   const lintCompartment = useRef(new Compartment());
 
+  // TS worker extensions — built once; each self-gates on isTsWorkerPath + ready().
+  const tsExtensions = useRef({
+    source: tsCompletionSource(() => pathRef.current),
+    linter: tsLinterExtension(() => pathRef.current),
+    hover: tsHoverExtension(() => pathRef.current),
+  });
+
+  /** Returns "ts" for .ts/.tsx, "js" for everything else that has a TS worker path. */
+  function tsKindForPath(p: string): "ts" | "js" {
+    return /\.(ts|tsx)$/i.test(p) ? "ts" : "js";
+  }
+
   // Search state + handlers from the hook.
   const [searchState, searchHandlers] = useEditorSearch(viewRef);
 
@@ -200,17 +215,23 @@ export function CodeEditor({
         ]),
         wrapCompartment.current.of(wordWrapRef.current ? EditorView.lineWrapping : []),
         completionCompartment.current.of(
-          completionExtensions(autocompleteRef.current),
+          completionExtensions(autocompleteRef.current, { source: tsExtensions.current.source }),
         ),
         lintCompartment.current.of(
-          lintExtensions(lintingRef.current, languageKeyForPath(docPath)),
+          lintExtensions(lintingRef.current, languageKeyForPath(docPath), {
+            linter: tsExtensions.current.linter,
+            hover: tsExtensions.current.hover,
+            kind: tsKindForPath(docPath),
+          }),
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            onChangeRef.current(
-              pathRef.current,
-              update.state.doc.toString(),
-            );
+            const docString = update.state.doc.toString();
+            onChangeRef.current(pathRef.current, docString);
+            // Notify the TS worker of the doc change so completions/diagnostics stay fresh.
+            if (isTsWorkerPath(pathRef.current)) {
+              tsClient().notifyDocChanged(pathRef.current, docString);
+            }
             // Keep match count fresh when the document changes.
             searchHandlersRef.current.onEditorUpdate();
           }
@@ -322,7 +343,7 @@ export function CodeEditor({
     if (!view) return;
     view.dispatch({
       effects: completionCompartment.current.reconfigure(
-        completionExtensions(autocomplete),
+        completionExtensions(autocomplete, { source: tsExtensions.current.source }),
       ),
     });
   }, [autocomplete, path]);
@@ -334,10 +355,24 @@ export function CodeEditor({
     if (!view) return;
     view.dispatch({
       effects: lintCompartment.current.reconfigure(
-        lintExtensions(linting, languageKeyForPath(path)),
+        lintExtensions(linting, languageKeyForPath(path), {
+          linter: tsExtensions.current.linter,
+          hover: tsExtensions.current.hover,
+          kind: tsKindForPath(path),
+        }),
       ),
     });
   }, [linting, path]);
+
+  // When the TS worker loads new types (e.g., node_modules/@types), force the
+  // lint compartment to re-run so diagnostics reflect the updated type info.
+  useEffect(() => {
+    const unsub = tsClient().onTypesUpdated(() => {
+      const view = viewRef.current;
+      if (view) forceLinting(view);
+    });
+    return unsub;
+  }, []);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">
