@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
@@ -11,6 +12,7 @@ import { pierreDark, searchMatchTheme, tooltipTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
+import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
 import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -42,6 +44,17 @@ interface CodeEditorProps {
   onChange: (path: string, content: string) => void;
   onSave: (path: string) => void;
   onCursor?: (line: number, col: number) => void;
+  /** Optional project root used to resolve .prettierrc config. */
+  formatRoot?: string | null;
+  /**
+   * Registers a view-level formatter so menu/palette/format-on-save paths can
+   * format through the live editor (visible change, cursor preserved, undo).
+   * The fn returns the formatted text, or null when it can't handle the path
+   * (not the active document, or no parser).
+   */
+  onRegisterFormatter?: (
+    fn: (path: string, config: object) => Promise<string | null>,
+  ) => void;
 }
 
 export function CodeEditor({
@@ -50,11 +63,15 @@ export function CodeEditor({
   onChange,
   onSave,
   onCursor,
+  formatRoot,
+  onRegisterFormatter,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const statesRef = useRef(new Map<string, EditorState>());
   const pathRef = useRef(path);
+  const formatRootRef = useRef(formatRoot ?? null);
+  formatRootRef.current = formatRoot ?? null;
   const themeCompartment = useRef(new Compartment());
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
@@ -147,6 +164,29 @@ export function CodeEditor({
               return true;
             },
           },
+          {
+            key: "Alt-Shift-f",
+            run: (view) => {
+              void (async () => {
+                const config = await resolvePrettierConfig(formatRootRef.current).catch(() => ({}));
+                try {
+                  const formatted = await formatWithCursorInView(
+                    view,
+                    pathRef.current,
+                    config,
+                  );
+                  if (formatted === null) {
+                    toast.info("No formatter for this file type");
+                  }
+                } catch (err) {
+                  toast.error(
+                    `Format failed: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                }
+              })();
+              return true;
+            },
+          },
           indentWithTab,
         ]),
         langCompartment.current.of(
@@ -203,6 +243,19 @@ export function CodeEditor({
     };
     // The initial doc is only read once, on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Register the view-level formatter so use-editor's formatFile / save-time
+  // formatting go through the live view (a state-only edit never reaches the
+  // uncontrolled EditorView — the buffer wouldn't visibly change).
+  const onRegisterFormatterRef = useRef(onRegisterFormatter);
+  onRegisterFormatterRef.current = onRegisterFormatter;
+  useEffect(() => {
+    onRegisterFormatterRef.current?.(async (docPath, config) => {
+      const view = viewRef.current;
+      if (!view || docPath !== pathRef.current) return null;
+      return formatWithCursorInView(view, docPath, config);
+    });
   }, []);
 
   // Swap editor state when the active path changes, caching the old one so

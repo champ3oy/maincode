@@ -67,6 +67,8 @@ function App() {
     handlePathRenamed,
     activeTab,
     saveFile,
+    formatFile,
+    setFormatRoot,
     dirtyCount,
     tabs,
     isDirty,
@@ -79,6 +81,12 @@ function App() {
   useEffect(() => {
     setTheme(settings.theme);
   }, [settings.theme, setTheme]);
+
+  // Keep use-editor's formatRootRef in sync so .prettierrc config is resolved
+  // from the correct project directory on format actions.
+  useEffect(() => {
+    setFormatRoot(rootPath);
+  }, [rootPath, setFormatRoot]);
 
   function clampFontSize(size: number): number {
     return Math.min(32, Math.max(8, Math.round(size)));
@@ -344,6 +352,9 @@ function App() {
       case "open-settings":
         void openFile(SETTINGS_PATH);
         break;
+      case "format-document":
+        if (activeTab) void formatFile(activeTab.path);
+        break;
     }
   };
   const menuActionRef = useRef(onMenuAction);
@@ -408,8 +419,15 @@ function App() {
         label: "Open Settings",
         run: () => void openFile(SETTINGS_PATH),
       },
+      {
+        id: "format-document",
+        label: "Format Document",
+        run: () => {
+          if (activeTab) void formatFile(activeTab.path);
+        },
+      },
     ],
-    [activeTab, saveFile, patch, handleOpenFolderDialog, openFile],
+    [activeTab, saveFile, formatFile, patch, handleOpenFolderDialog, openFile],
   );
 
   // Restore the CLI launch path / last folder only in the primary window;
@@ -757,6 +775,7 @@ function App() {
                 >
                   <EditorArea
                     onCursor={(line, col) => setCursor({ line, col })}
+                    formatRoot={rootPath}
                   />
                 </div>
                 {sidebarTab === "changes" && (

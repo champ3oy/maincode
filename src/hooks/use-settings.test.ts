@@ -89,7 +89,7 @@ describe("mergeSettings", () => {
   it("handles completely valid full settings object", () => {
     const full = {
       theme: "dark",
-      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false },
+      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false, formatOnSave: true },
       terminal: { fontSize: 14 },
       diff: { fontSize: 15, fontFamily: "system-mono", wordWrap: true },
     };
@@ -112,6 +112,15 @@ describe("mergeSettings", () => {
   it("falls back to default linting (true) for wrong type", () => {
     expect(mergeSettings({ editor: { linting: "x" } }).editor.linting).toBe(true);
     expect(mergeSettings({ editor: { linting: 0 } }).editor.linting).toBe(true);
+  });
+
+  it("accepts editor.formatOnSave: true", () => {
+    expect(mergeSettings({ editor: { formatOnSave: true } }).editor.formatOnSave).toBe(true);
+  });
+
+  it("falls back to default formatOnSave (false) for wrong type", () => {
+    expect(mergeSettings({ editor: { formatOnSave: "yes" } }).editor.formatOnSave).toBe(false);
+    expect(mergeSettings({ editor: { formatOnSave: 1 } }).editor.formatOnSave).toBe(false);
   });
 
   it("accepts valid diff.fontFamily values", () => {

@@ -25,6 +25,7 @@ export interface Settings {
     wordWrap: boolean;
     autocomplete: boolean;
     linting: boolean;
+    formatOnSave: boolean;
   };
   terminal: {
     fontSize: number;
@@ -58,7 +59,7 @@ export type DeepPartial<T> = T extends object
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
-  editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false, autocomplete: true, linting: true },
+  editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false, autocomplete: true, linting: true, formatOnSave: false },
   terminal: { fontSize: 12 },
   diff: { fontSize: 13, fontFamily: "app-mono", wordWrap: false },
 };
@@ -119,6 +120,7 @@ export function mergeSettings(raw: unknown): Settings {
   const editorWordWrap = typeof re.wordWrap === "boolean" ? re.wordWrap : d.editor.wordWrap;
   const editorAutocomplete = typeof re.autocomplete === "boolean" ? re.autocomplete : d.editor.autocomplete;
   const editorLinting = typeof re.linting === "boolean" ? re.linting : d.editor.linting;
+  const editorFormatOnSave = typeof re.formatOnSave === "boolean" ? re.formatOnSave : d.editor.formatOnSave;
 
   // terminal
   const rt = (typeof r.terminal === "object" && r.terminal !== null)
@@ -140,7 +142,7 @@ export function mergeSettings(raw: unknown): Settings {
 
   return {
     theme,
-    editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap, autocomplete: editorAutocomplete, linting: editorLinting },
+    editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap, autocomplete: editorAutocomplete, linting: editorLinting, formatOnSave: editorFormatOnSave },
     terminal: { fontSize: terminalFontSize },
     diff: { fontSize: diffFontSize, fontFamily: diffFontFamily, wordWrap: diffWordWrap },
   };
@@ -161,6 +163,7 @@ function deepMergePartial(current: Settings, partial: DeepPartial<Settings>): Se
       wordWrap: partial.editor?.wordWrap ?? current.editor.wordWrap,
       autocomplete: partial.editor?.autocomplete ?? current.editor.autocomplete,
       linting: partial.editor?.linting ?? current.editor.linting,
+      formatOnSave: partial.editor?.formatOnSave ?? current.editor.formatOnSave,
     },
     terminal: {
       fontSize: partial.terminal?.fontSize ?? current.terminal.fontSize,
