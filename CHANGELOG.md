@@ -17,6 +17,9 @@ entries under a new version heading.
   ([#1](https://github.com/champ3oy/maincode/pull/1))
 
 ### Fixed
+- Terminal: **Shift+Enter** now inserts a newline (and all modified keys work)
+  in apps that use the kitty keyboard protocol, e.g. `claude` — via the
+  xterm.js 6.1 upgrade.
 - New windows were missing capabilities, so dragging, IPC, events, and dialogs
   were denied in them. ([#1](https://github.com/champ3oy/maincode/pull/1))
 
