@@ -41,6 +41,7 @@ describe("mapCompilerOptions", () => {
     const o = mapCompilerOptions(null, fakeTs);
     expect(o.allowJs).toBe(true);
     expect(o.skipLibCheck).toBe(true);
+    expect(o.libReplacement).toBe(false);
     const bad = mapCompilerOptions("{not json", fakeTs);
     expect(bad.allowJs).toBe(true);
   });

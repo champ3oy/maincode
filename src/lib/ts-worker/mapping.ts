@@ -5,6 +5,7 @@ const DEFAULTS = {
   skipLibCheck: true,
   esModuleInterop: true,
   allowSyntheticDefaultImports: true,
+  libReplacement: false,
 };
 
 export function mapCompilerOptions(tsconfigText: string | null, ts: any): any {
