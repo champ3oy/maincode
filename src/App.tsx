@@ -890,13 +890,16 @@ function App() {
                   never moves. */}
               {terminalMounted && (
                 <>
+                  {/* 1px visual line with a wide invisible grab strip (the
+                      ::after) so it's actually draggable — a bare 1px div can't
+                      be clicked. Mirrors the ResizableHandle hit-area trick. */}
                   <div
                     onMouseDown={startTerminalResize}
                     className={cn(
-                      "shrink-0 bg-border transition-colors hover:bg-primary/40",
+                      "relative z-10 shrink-0 bg-border transition-colors hover:bg-primary/50",
                       terminalPosition === "right"
-                        ? "w-px cursor-col-resize"
-                        : "h-px cursor-row-resize",
+                        ? "w-px cursor-col-resize after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+                        : "h-px cursor-row-resize after:absolute after:inset-x-0 after:top-1/2 after:h-2 after:-translate-y-1/2",
                       !showTerminal && "hidden",
                     )}
                   />
