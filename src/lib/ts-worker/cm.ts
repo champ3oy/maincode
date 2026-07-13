@@ -8,6 +8,7 @@ import {
   hoverTooltip,
   type Extension,
 } from "@codemirror/view";
+import { StateEffect, StateField } from "@codemirror/state";
 import { isTsWorkerPath, tsClient } from "./client";
 import type { CompletionItemData } from "./protocol";
 
@@ -115,7 +116,31 @@ const cmdHoverMark = Decoration.mark({
 });
 
 const cmdHoverTheme = EditorView.theme({
-  ".cm-cmd-hover-active .cm-scroller": { cursor: "pointer" },
+  ".cm-cmd-hover-active .cm-content": { cursor: "pointer" },
+});
+
+// A StateEffect carries the word range to underline (or null to clear). The
+// StateField renders it. Driving the decoration through the normal
+// transaction/state cycle — rather than mutating a ViewPlugin field and forcing
+// a re-read with an empty dispatch — avoids the re-entrant-dispatch trap: a
+// ViewPlugin method named `update` IS the update lifecycle hook, so dispatching
+// from it is forbidden by CodeMirror and silently breaks the plugin.
+const setCmdHover = StateEffect.define<{ from: number; to: number } | null>();
+
+const cmdHoverField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setCmdHover)) {
+        deco = e.value
+          ? Decoration.set([cmdHoverMark.range(e.value.from, e.value.to)])
+          : Decoration.none;
+      }
+    }
+    return deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
 });
 
 export function tsGoToDefHoverAffordance(
@@ -126,75 +151,50 @@ export function tsGoToDefHoverAffordance(
 
   const plugin = ViewPlugin.fromClass(
     class {
-      decorations: DecorationSet = Decoration.none;
-      // Whether the meta/ctrl modifier is currently held.
-      private meta = false;
-      // Last known mouse coordinates, so a keydown (with no fresh mouse event)
-      // can still resolve the word currently under the pointer.
+      // The currently underlined word range, so we skip redundant dispatches
+      // while the pointer moves within the same identifier.
+      private from = -1;
+      private to = -1;
       private lastX = -1;
       private lastY = -1;
 
       constructor(readonly view: EditorView) {}
 
-      /** Recompute the underlined word from the current meta state + mouse pos. */
-      update() {
-        if (!this.meta || !active() || this.lastX < 0) {
-          this.setDeco(Decoration.none);
-          return;
+      /** Recompute the target word from the current modifier + mouse position
+       *  and dispatch a change only when the underlined range actually moves. */
+      private refresh(meta: boolean) {
+        let next: { from: number; to: number } | null = null;
+        if (meta && active() && this.lastX >= 0) {
+          const pos = this.view.posAtCoords({ x: this.lastX, y: this.lastY });
+          if (pos != null) {
+            const word = this.view.state.wordAt(pos);
+            if (word && word.from !== word.to) next = { from: word.from, to: word.to };
+          }
         }
-        const pos = this.view.posAtCoords({ x: this.lastX, y: this.lastY });
-        if (pos == null) {
-          this.setDeco(Decoration.none);
-          return;
-        }
-        const word = this.view.state.wordAt(pos);
-        if (!word || word.from === word.to) {
-          this.setDeco(Decoration.none);
-          return;
-        }
-        this.setDeco(Decoration.set([cmdHoverMark.range(word.from, word.to)]));
-      }
-
-      // The from/to of the currently marked word, so we can skip redundant
-      // dispatches while the pointer moves within the same identifier.
-      private markedFrom = -1;
-      private markedTo = -1;
-
-      private setDeco(deco: DecorationSet) {
-        let from = -1;
-        let to = -1;
-        if (deco !== Decoration.none) {
-          const it = deco.iter();
-          from = it.from;
-          to = it.to;
-        }
-        // No change (same word range, or still nothing) → nothing to do. This
-        // keeps mousemove from dispatching a transaction on every pixel.
-        if (from === this.markedFrom && to === this.markedTo) return;
-        this.markedFrom = from;
-        this.markedTo = to;
-        this.decorations = deco;
-        if (deco !== Decoration.none) this.view.scrollDOM.classList.add("cm-cmd-hover-active");
+        const nf = next ? next.from : -1;
+        const nt = next ? next.to : -1;
+        if (nf === this.from && nt === this.to) return; // unchanged — no-op
+        this.from = nf;
+        this.to = nt;
+        if (next) this.view.scrollDOM.classList.add("cm-cmd-hover-active");
         else this.view.scrollDOM.classList.remove("cm-cmd-hover-active");
-        // Empty transaction: forces the view to re-read `decorations`.
-        this.view.dispatch({});
+        // Dispatched from a DOM event handler (never from update()), so this is
+        // a normal, safe transaction.
+        this.view.dispatch({ effects: setCmdHover.of(next) });
       }
 
       onMouseMove(e: MouseEvent) {
         this.lastX = e.clientX;
         this.lastY = e.clientY;
-        this.meta = e.metaKey || e.ctrlKey;
-        this.update();
+        this.refresh(e.metaKey || e.ctrlKey);
       }
       onKey(e: KeyboardEvent) {
-        this.meta = e.metaKey || e.ctrlKey;
-        this.update();
+        this.refresh(e.metaKey || e.ctrlKey);
       }
       onLeave() {
-        this.meta = false;
         this.lastX = -1;
         this.lastY = -1;
-        this.setDeco(Decoration.none);
+        this.refresh(false);
       }
 
       destroy() {
@@ -202,7 +202,6 @@ export function tsGoToDefHoverAffordance(
       }
     },
     {
-      decorations: (v) => v.decorations,
       eventHandlers: {
         mousemove(e) {
           this.onMouseMove(e);
@@ -220,7 +219,7 @@ export function tsGoToDefHoverAffordance(
     },
   );
 
-  return [plugin, cmdHoverTheme];
+  return [cmdHoverField, plugin, cmdHoverTheme];
 }
 
 export function tsHoverExtension(getPath: () => string): Extension {
