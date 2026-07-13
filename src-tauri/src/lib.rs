@@ -3,6 +3,8 @@ mod menu;
 mod watcher;
 mod fs_ops;
 mod pty;
+#[cfg(target_os = "macos")]
+mod dock_menu;
 
 use git::AppState;
 use std::path::PathBuf;
@@ -37,6 +39,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .menu(|handle| menu::build_menu(handle))
+        .setup(|_app| {
+            // Install the macOS Dock-menu "New Window" item. Runs on the main
+            // thread after the NSApplication delegate exists (both required).
+            #[cfg(target_os = "macos")]
+            dock_menu::install(_app.handle());
+            Ok(())
+        })
         .on_menu_event(|app, event| {
             let id = event.id().0.as_str();
             if id == "new-window" {
