@@ -162,6 +162,56 @@ function App() {
   const [terminalPosition, setTerminalPosition] = useState<"bottom" | "right">(
     "bottom",
   );
+  // Once opened, the terminal dock stays mounted; hiding it is done via
+  // display:none (the `hidden` class) so shells/scrollback/splits and the
+  // xterm DOM survive — no unmount, no re-parent, no glitch.
+  const [terminalMounted, setTerminalMounted] = useState(false);
+  const TERM_DEFAULT_BOTTOM = 260; // px height
+  const TERM_DEFAULT_RIGHT = 420; // px width
+  const [terminalSize, setTerminalSize] = useState(TERM_DEFAULT_BOTTOM);
+
+  const toggleTerminal = useCallback(() => {
+    setTerminalMounted(true);
+    setShowTerminal((v) => !v);
+  }, []);
+
+  const toggleTerminalPosition = useCallback(() => {
+    setTerminalPosition((p) => {
+      const next = p === "bottom" ? "right" : "bottom";
+      setTerminalSize(next === "right" ? TERM_DEFAULT_RIGHT : TERM_DEFAULT_BOTTOM);
+      return next;
+    });
+  }, []);
+
+  // Drag the divider to resize the terminal (height when docked bottom, width
+  // when docked right).
+  const startTerminalResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const isRight = terminalPosition === "right";
+      const startPos = isRight ? e.clientX : e.clientY;
+      const startSize = terminalSize;
+      const onMove = (ev: MouseEvent) => {
+        const cur = isRight ? ev.clientX : ev.clientY;
+        // Dragging toward the editor (left for right-dock, up for bottom-dock)
+        // grows the terminal.
+        const delta = startPos - cur;
+        const axisMax = (isRight ? window.innerWidth : window.innerHeight) - 200;
+        setTerminalSize(
+          Math.min(Math.max(startSize + delta, 120), Math.max(200, axisMax)),
+        );
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        document.body.style.userSelect = "";
+      };
+      document.body.style.userSelect = "none";
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [terminalPosition, terminalSize],
+  );
 
   // Cursor position for status bar
   const [cursor, setCursor] = useState<{ line: number; col: number } | null>(
@@ -193,12 +243,12 @@ function App() {
       }
       if (e.ctrlKey && e.key === "`") {
         e.preventDefault();
-        setShowTerminal((v) => !v);
+        toggleTerminal();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [toggleTerminal]);
 
   // Suppress the native webview context menu (the dev "Reload / Inspect
   // Element" menu) everywhere except text fields and the code editor, where
@@ -365,7 +415,7 @@ function App() {
         setTreeSearchOpen(true);
         break;
       case "toggle-terminal":
-        setShowTerminal((v) => !v);
+        toggleTerminal();
         break;
       case "font-increase":
         fontIncrease();
@@ -439,7 +489,7 @@ function App() {
       {
         id: "toggle-terminal",
         label: "Toggle Terminal",
-        run: () => setShowTerminal((v) => !v),
+        run: () => toggleTerminal(),
       },
       {
         id: "open-settings",
@@ -454,7 +504,15 @@ function App() {
         },
       },
     ],
-    [activeTab, saveFile, formatFile, patch, handleOpenFolderDialog, openFile],
+    [
+      activeTab,
+      saveFile,
+      formatFile,
+      patch,
+      handleOpenFolderDialog,
+      openFile,
+      toggleTerminal,
+    ],
   );
 
   // Restore the CLI launch path / last folder only in the primary window;
@@ -677,7 +735,7 @@ function App() {
           }
           onSelectTab={setSidebarTab}
           showTerminal={showTerminal}
-          onToggleTerminal={() => setShowTerminal((v) => !v)}
+          onToggleTerminal={toggleTerminal}
         />
         <ResizablePanelGroup
           orientation="horizontal"
@@ -788,14 +846,14 @@ function App() {
           </ResizablePanel>
           <ResizableHandle />
           <ResizablePanel>
-            <ResizablePanelGroup
-              orientation={
-                terminalPosition === "right" ? "horizontal" : "vertical"
-              }
+            <div
+              className={cn(
+                "flex h-full min-h-0 min-w-0",
+                terminalPosition === "right" ? "flex-row" : "flex-col",
+              )}
             >
-              <ResizablePanel
-                defaultSize={terminalPosition === "right" ? "62%" : "70%"}
-              >
+              {/* Editor fills all space the terminal doesn't take. */}
+              <div className="relative min-h-0 min-w-0 flex-1">
                 {/* Keep EditorArea mounted (hidden) so tabs/undo survive tab flips */}
                 <div
                   className={cn(sidebarTab === "changes" && "hidden", "h-full")}
@@ -825,28 +883,50 @@ function App() {
                     scrollNonce={scrollNonce}
                   />
                 )}
-              </ResizablePanel>
-              {showTerminal && (
+              </div>
+
+              {/* Terminal: mounted once opened, then only HIDDEN (display:none)
+                  so its shells, scrollback, and splits survive — the xterm DOM
+                  never moves. */}
+              {terminalMounted && (
                 <>
-                  <ResizableHandle />
-                  <ResizablePanel
-                    defaultSize={terminalPosition === "right" ? "38%" : "30%"}
-                    minSize={terminalPosition === "right" ? 240 : 80}
+                  {/* 1px visual line with a wide invisible grab strip (the
+                      ::after) so it's actually draggable — a bare 1px div can't
+                      be clicked. Mirrors the ResizableHandle hit-area trick. */}
+                  <div
+                    onMouseDown={startTerminalResize}
+                    className={cn(
+                      "relative z-10 shrink-0 bg-border transition-colors hover:bg-primary/50",
+                      terminalPosition === "right"
+                        ? "w-px cursor-col-resize after:absolute after:inset-y-0 after:left-1/2 after:w-2 after:-translate-x-1/2"
+                        : "h-px cursor-row-resize after:absolute after:inset-x-0 after:top-1/2 after:h-2 after:-translate-y-1/2",
+                      !showTerminal && "hidden",
+                    )}
+                  />
+                  <div
+                    className={cn(
+                      "min-h-0 min-w-0 shrink-0",
+                      !showTerminal && "hidden",
+                    )}
+                    style={
+                      terminalPosition === "right"
+                        ? { width: terminalSize }
+                        : { height: terminalSize }
+                    }
                   >
                     <TerminalDock
                       cwd={rootPath}
                       position={terminalPosition}
-                      onTogglePosition={() =>
-                        setTerminalPosition((p) =>
-                          p === "bottom" ? "right" : "bottom",
-                        )
-                      }
-                      onEmpty={() => setShowTerminal(false)}
+                      onTogglePosition={toggleTerminalPosition}
+                      onEmpty={() => {
+                        setShowTerminal(false);
+                        setTerminalMounted(false);
+                      }}
                     />
-                  </ResizablePanel>
+                  </div>
                 </>
               )}
-            </ResizablePanelGroup>
+            </div>
           </ResizablePanel>
         </ResizablePanelGroup>
         {gitPending ? (
