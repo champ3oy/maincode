@@ -52,9 +52,9 @@ import {
   listFilesRecursive,
 } from "@/lib/fs";
 import {
-  CommandPalette,
+  CommandCenter,
   type PaletteCommand,
-} from "@/components/command-palette/command-palette";
+} from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
 
 function App() {
@@ -70,7 +70,7 @@ function App() {
     tabs,
     isDirty,
   } = useEditor();
-  const { addRecent } = useRecentRepos();
+  const { addRecent, recent } = useRecentRepos();
   const {
     increase: fontIncrease,
     decrease: fontDecrease,
@@ -136,7 +136,7 @@ function App() {
   // Cmd+K / Cmd+P → toggle command palette; Ctrl+` → toggle terminal
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "p")) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
@@ -573,12 +573,14 @@ function App() {
     return (
       <>
         <Welcome onOpenFolder={openFolderAndRecord} />
-        <CommandPalette
+        <CommandCenter
           open={paletteOpen}
           onOpenChange={setPaletteOpen}
           files={paletteFiles}
           onOpenFile={(rel) => void openFile(`${rootPath ?? ""}/${rel}`)}
           commands={paletteCommands}
+          recent={recent}
+          onOpenRecent={(path) => openFolderAndRecord(path)}
         />
         <Toaster />
       </>
@@ -795,12 +797,14 @@ function App() {
           />
         )}
       </div>
-      <CommandPalette
+      <CommandCenter
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         files={paletteFiles}
         onOpenFile={(rel) => void openFile(`${rootPath}/${rel}`)}
         commands={paletteCommands}
+        recent={recent}
+        onOpenRecent={(path) => openFolderAndRecord(path)}
       />
       <Toaster />
     </>

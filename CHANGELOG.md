@@ -19,6 +19,11 @@ entries under a new version heading.
   (⇧⌘N) and the macOS **Dock menu**, which also lists open windows to switch
   between. Window titles show the open project.
   ([#1](https://github.com/champ3oy/maincode/pull/1))
+- **Command Center** — replaces the ⌘P command palette with a Warp-style
+  tabbed overlay (All / Files / Recent / Commands tabs, fuzzy filtering, icon
+  rows, footer hints). Also fixes the ⌘P double-toggle bug: the keydown
+  handler now handles only ⌘K; ⌘P is handled exclusively by the native menu
+  accelerator.
 
 ### Fixed
 - New windows were missing capabilities, so dragging, IPC, events, and dialogs
