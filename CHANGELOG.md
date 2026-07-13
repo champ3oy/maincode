@@ -9,6 +9,8 @@ entries under a new version heading.
 ## [Unreleased]
 
 ### Added
+- Editor: **font zoom** — ⌘= / ⌘- adjust the editor font size and ⌘0 resets it
+  (also in the View menu); the chosen size persists across sessions.
 - Native multi-window support — open multiple projects at once, each window fully
   independent (file tree, git, terminals). New Window via **File → New Window**
   (⇧⌘N) and the macOS **Dock menu**, which also lists open windows to switch

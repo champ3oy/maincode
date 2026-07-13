@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { cmLanguageFor } from "@/lib/cm-language";
 import { pierreDark, searchPanelTheme } from "@/lib/cm-theme";
 import { languageKeyForPath } from "@/lib/language";
+import { useEditorFont } from "@/hooks/use-editor-font";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
 // transparent so it blends with the app background.
@@ -19,6 +20,12 @@ const lightBackground = EditorView.theme({
 function themeExtensions(dark: boolean) {
   // Dark mode uses the pierre-dark palette so the editor matches the diff view.
   return dark ? pierreDark() : [lightBackground];
+}
+
+// Editor font size lives on the `.cm-editor` root so it cascades to content and
+// gutters. Reconfigured live via a Compartment when the size changes.
+function fontTheme(size: number) {
+  return EditorView.theme({ "&": { fontSize: `${size}px` } });
 }
 
 interface CodeEditorProps {
@@ -54,6 +61,11 @@ export function CodeEditor({
   const darkRef = useRef(resolvedTheme === "dark");
   darkRef.current = resolvedTheme === "dark";
 
+  const { fontSize } = useEditorFont();
+  const fontSizeRef = useRef(fontSize);
+  fontSizeRef.current = fontSize;
+  const fontCompartment = useRef(new Compartment());
+
   const makeStateRef = useRef((docPath: string, doc: string): EditorState => {
     return EditorState.create({
       doc,
@@ -74,6 +86,7 @@ export function CodeEditor({
           cmLanguageFor(languageKeyForPath(docPath)),
         ),
         themeCompartment.current.of(themeExtensions(darkRef.current)),
+        fontCompartment.current.of(fontTheme(fontSizeRef.current)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(
@@ -131,6 +144,16 @@ export function CodeEditor({
       ),
     });
   }, [resolvedTheme, path]);
+
+  // Apply the editor font size live, and re-apply after tab swaps (a cached
+  // state carries the font compartment value from when it was created).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: fontCompartment.current.reconfigure(fontTheme(fontSize)),
+    });
+  }, [fontSize, path]);
 
   return (
     <div ref={hostRef} className="h-full min-h-0 overflow-hidden bg-background" />
