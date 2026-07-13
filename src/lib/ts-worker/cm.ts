@@ -86,7 +86,7 @@ export function tsLinterExtension(getPath: () => string): Extension {
         .filter((d) => d.from <= docLen)
         .map((d): Diagnostic => ({ from: d.from, to: Math.min(d.to, docLen), severity: d.severity, message: d.message }));
     },
-    { delay: 400 },
+    { delay: 250 },
   );
 }
 

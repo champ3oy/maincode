@@ -105,6 +105,28 @@ function flushWanted() {
   rpc.notify({ kind: "needFiles", paths });
 }
 
+// ---- offset → line/column mapping (go-to-definition) ------------------------
+// Convert a 0-based character offset in `fileName` to a 1-based {line, column} for
+// CodeMirror. Uses ts.getLineAndCharacterOfPosition (0-based line/char) on the target
+// SourceFile — preferring the program's own (which includes .d.ts under node_modules
+// the program loaded), then the VFS text — and shifts both to 1-based. Returns null
+// only when neither source is available.
+function offsetToLineColumn(
+  fileName: string,
+  offset: number,
+): { line: number; column: number } | null {
+  let source: ts.SourceFile | undefined = service?.getProgram()?.getSourceFile(fileName);
+  if (!source) {
+    const vfs = files.get(fileName);
+    if (vfs) {
+      source = ts.createSourceFile(fileName, vfs.text, ts.ScriptTarget.ESNext, false);
+    }
+  }
+  if (!source) return null;
+  const lc = ts.getLineAndCharacterOfPosition(source, offset);
+  return { line: lc.line + 1, column: lc.character + 1 };
+}
+
 // ---- request handling --------------------------------------------------------
 async function handle(req: WorkerRequest): Promise<unknown> {
   switch (req.kind) {
@@ -200,11 +222,34 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         docs: ts.displayPartsToString(info.documentation)?.split("\n")[0] || undefined,
       };
     }
+    case "definition": {
+      if (!service) return null;
+      const defs = service.getDefinitionAtPosition(req.path, req.offset);
+      // flushWanted like the other handlers so any node_modules probes triggered
+      // while resolving the definition are surfaced to the client for loading.
+      flushWanted();
+      const def = defs?.[0];
+      if (!def) return null;
+      // Map the target's 0-based textSpan.start → 1-based {line, column}. Prefer the
+      // program's SourceFile (has TS's own line map, incl. .d.ts under node_modules
+      // that the program pulled in). Fall back to the VFS text if the target isn't a
+      // program source file (rare); return null only when we truly can't position it.
+      const pos = offsetToLineColumn(def.fileName, def.textSpan.start);
+      if (!pos) return null;
+      return { path: def.fileName, line: pos.line, column: pos.column };
+    }
     case "filesLoaded": {
       let changed = false;
+      // Did THIS batch resolve any path TS was still waiting on (pending)? Even an
+      // all-missing batch (every content === null) can flip a diagnostic: once the
+      // last probe a resolution was blocked on is confirmed absent, the next program
+      // build — forced to re-resolve by hasInvalidatedResolutions — can settle that
+      // module (succeed via a different candidate, or emit its final error). We track
+      // this so the client re-lints in exactly that case; see the notify below.
+      let resolvedPending = false;
       const arrivedManifestDirs: string[] = [];
       for (const f of req.files as FileEntry[]) {
-        pending.delete(f.path);
+        if (pending.delete(f.path)) resolvedPending = true;
         if (f.content === null) missing.add(f.path);
         else {
           setFile(f.path, f.content);
@@ -250,6 +295,26 @@ async function handle(req: WorkerRequest): Promise<unknown> {
         }
         projectVersion++;
         resolutionsInvalidated = true;
+      }
+      // Re-lint signal. Fire `typesUpdated` (the client's forceLinting trigger)
+      // whenever open-file diagnostics could now differ:
+      //   - `changed`: new content arrived (the always-fired case, as before).
+      //   - `resolvedPending && resolutionsInvalidated`: no NEW content this batch, but
+      //     we cleared pending probes while a re-resolution is still armed (set by an
+      //     earlier content-changing batch and not yet consumed by a diagnostics query).
+      //     This is the stale-squiggle case: the final resolution succeeds by RE-
+      //     RESOLVING already-loaded files against the now-complete VFS/missing set, so
+      //     `changed` is false and — without this — the editor would never re-lint,
+      //     leaving stale "Cannot find module" / jsx errors until the user types or
+      //     switches files.
+      // Loop-safety: we NEVER notify unconditionally. `changed` requires genuinely new
+      // content; the second clause requires BOTH a pending path cleared by THIS batch
+      // (so `resolvedPending` can't stay true across empty rounds) AND an armed
+      // invalidation from a real prior content change. Each round therefore either loads
+      // new content, drains pending, or does neither (no notify) — so typesUpdated →
+      // diagnostics → needFiles → filesLoaded cannot recur forever; the landing test's
+      // round cap proves convergence.
+      if (changed || (resolvedPending && resolutionsInvalidated)) {
         rpc.notify({ kind: "typesUpdated" });
       }
       return true;

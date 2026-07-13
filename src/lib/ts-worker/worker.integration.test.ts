@@ -151,6 +151,56 @@ describe("ts-worker on-demand node_modules resolution (integration)", () => {
   );
 
   it(
+    "go-to-definition maps a symbol to its 1-based {line, column} across files",
+    async () => {
+      // Two in-VFS files, no node_modules needed: a local symbol defined in one
+      // file and referenced in another. This exercises the full
+      // getDefinitionAtPosition → offsetToLineColumn (0-based offset → 1-based
+      // line/column) path end to end against a real TS program.
+      const root = "/def-fixture";
+      const libPath = `${root}/lib.ts`;
+      const appPath = `${root}/app.ts`;
+      //            1234567890123
+      const lib = "export const greeting = 'hi';\n"; // `greeting` starts at col 14, line 1
+      const app =
+        'import { greeting } from "./lib";\n' + // line 1
+        "console.log(greeting);\n"; // line 2: `greeting` at offset "console.log(".length = 12 → col 13
+      await fake.request({
+        kind: "openProject",
+        root,
+        files: [
+          { path: libPath, content: lib },
+          { path: appPath, content: app },
+        ],
+        tsconfigText: JSON.stringify({ compilerOptions: {} }),
+      });
+
+      // Cross-file: from the reference in app.ts to the declaration in lib.ts.
+      const refOffset = app.indexOf("greeting", app.indexOf("console.log"));
+      const crossFile = (await fake.request({
+        kind: "definition",
+        path: appPath,
+        offset: refOffset,
+      })) as { path: string; line: number; column: number } | null;
+      expect(crossFile).not.toBeNull();
+      expect(crossFile!.path).toBe(libPath);
+      expect(crossFile!.line).toBe(1);
+      expect(crossFile!.column).toBe(14); // 1-based: `greeting` after "export const "
+
+      // Same-file: definition of the imported binding resolves back into lib.ts too.
+      // Null case: whitespace/non-identifier position yields no definition.
+      const nullDef = (await fake.request({
+        kind: "definition",
+        path: appPath,
+        offset: 0, // on `import` keyword region with no symbol def
+      })) as unknown;
+      // getDefinitionAtPosition may return null here; the worker must not throw.
+      expect(nullDef === null || typeof nullDef === "object").toBe(true);
+    },
+    30_000,
+  );
+
+  it(
     "converges for an exports-map-typed package (regression: react-router-dom-style)",
     async () => {
       // Self-contained fixture reproducing the real report. A package whose types

@@ -3,6 +3,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { useEditor } from "@/hooks/use-editor";
 import { isImagePath } from "@/lib/image";
 import { isSettingsPath, settingsPath } from "@/lib/settings";
+import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 import { CodeEditor } from "./code-editor";
 import { ImageViewer } from "./image-viewer";
 import { SettingsView } from "./settings-view";
@@ -11,9 +12,20 @@ import { TabBar } from "./tab-bar";
 interface EditorAreaProps {
   onCursor?: (line: number, col: number) => void;
   formatRoot?: string | null;
+  /** Cmd/Ctrl+Click go-to-definition target from the TS worker. */
+  onGoToDefinition?: (target: DefinitionResult) => void;
+  /** Reveal target for the active editor (drives cross-file go-to-def jumps). */
+  revealTarget?: { path: string; line: number; column: number } | null;
+  onRevealConsumed?: () => void;
 }
 
-export function EditorArea({ onCursor, formatRoot }: EditorAreaProps) {
+export function EditorArea({
+  onCursor,
+  formatRoot,
+  onGoToDefinition,
+  revealTarget,
+  onRevealConsumed,
+}: EditorAreaProps) {
   const {
     tabs,
     activeTab,
@@ -85,6 +97,9 @@ export function EditorArea({ onCursor, formatRoot }: EditorAreaProps) {
               onCursor={onCursor}
               formatRoot={formatRoot}
               onRegisterFormatter={registerViewFormatter}
+              onGoToDefinition={onGoToDefinition}
+              revealTarget={revealTarget}
+              onRevealConsumed={onRevealConsumed}
             />
           )}
         </div>

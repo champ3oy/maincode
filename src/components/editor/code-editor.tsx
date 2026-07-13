@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { Compartment, EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorState, EditorSelection, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
@@ -17,6 +17,7 @@ import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
 import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
 import { tsCompletionSource, tsLinterExtension, tsHoverExtension } from "@/lib/ts-worker/cm";
 import { scriptKindForPath } from "@/lib/ts-worker/mapping";
+import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 import { FindWidget } from "./find-widget";
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
@@ -59,6 +60,21 @@ interface CodeEditorProps {
   onRegisterFormatter?: (
     fn: (path: string, config: object) => Promise<string | null>,
   ) => void;
+  /**
+   * Cmd/Ctrl+Click go-to-definition. Called with the resolved TS definition
+   * target so the app can open the file and reveal the location. Only wired when
+   * the TS worker is enabled (see `typescript` gate). If omitted, Cmd+Click is
+   * a no-op and normal text interaction is preserved.
+   */
+  onGoToDefinition?: (target: DefinitionResult) => void;
+  /**
+   * When set and it matches the active path, the editor scrolls to and selects
+   * the start of `line` (1-based) exactly once, then calls `onRevealConsumed`.
+   * Drives cross-file go-to-definition: App sets this after openFile so the
+   * newly-mounted (or already-mounted) editor jumps to the target line.
+   */
+  revealTarget?: { path: string; line: number; column: number } | null;
+  onRevealConsumed?: () => void;
 }
 
 export function CodeEditor({
@@ -69,6 +85,9 @@ export function CodeEditor({
   onCursor,
   formatRoot,
   onRegisterFormatter,
+  onGoToDefinition,
+  revealTarget,
+  onRevealConsumed,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -117,6 +136,11 @@ export function CodeEditor({
 
   const typescriptRef = useRef(typescript);
   typescriptRef.current = typescript;
+
+  const onGoToDefinitionRef = useRef(onGoToDefinition);
+  onGoToDefinitionRef.current = onGoToDefinition;
+  const onRevealConsumedRef = useRef(onRevealConsumed);
+  onRevealConsumedRef.current = onRevealConsumed;
 
   // TS worker extensions — built once; each self-gates on isTsWorkerPath + ready().
   const tsExtensions = useRef({
@@ -255,6 +279,29 @@ export function CodeEditor({
             }
           }
         }),
+        // Cmd/Ctrl+Click go-to-definition. Gated on the TS worker being on
+        // (typescriptRef) and the active file being a TS-worker path; otherwise we
+        // leave the event alone so normal click/selection behaves as usual. When we
+        // do handle it we preventDefault so the browser doesn't also place the caret
+        // / start a text selection at the click point.
+        EditorView.domEventHandlers({
+          mousedown: (event, view) => {
+            if (!(event.metaKey || event.ctrlKey)) return false;
+            const goto = onGoToDefinitionRef.current;
+            if (!goto || !typescriptRef.current) return false;
+            const p = pathRef.current;
+            if (!isTsWorkerPath(p) || !tsClient().ready()) return false;
+            const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            if (offset == null) return false;
+            event.preventDefault();
+            void tsClient()
+              .getDefinition(p, offset)
+              .then((target) => {
+                if (target) goto(target);
+              });
+            return true;
+          },
+        }),
       ],
     });
   });
@@ -390,6 +437,34 @@ export function CodeEditor({
     });
     return unsub;
   }, []);
+
+  // Go-to-definition reveal: when App sets `revealTarget` for the ACTIVE path
+  // (after openFile), scroll to and select the start of the target line ONCE,
+  // then clear it via onRevealConsumed. The `path` dep ensures this runs after a
+  // cross-file swap has mounted the target document's state (pathRef === path by
+  // then). Same-file jumps also land here since the effect re-fires on the new
+  // revealTarget. We select the line start (column is available but line-level
+  // placement is the robust, expected behavior for go-to-definition).
+  useEffect(() => {
+    if (!revealTarget || revealTarget.path !== path) return;
+    const view = viewRef.current;
+    if (!view) return;
+    const doc = view.state.doc;
+    if (revealTarget.line < 1 || revealTarget.line > doc.lines) {
+      onRevealConsumedRef.current?.();
+      return;
+    }
+    const lineInfo = doc.line(revealTarget.line);
+    const col = Math.max(1, revealTarget.column);
+    const pos = Math.min(lineInfo.from + (col - 1), lineInfo.to);
+    view.dispatch({
+      selection: EditorSelection.cursor(pos),
+      effects: EditorView.scrollIntoView(pos, { y: "center" }),
+      scrollIntoView: true,
+    });
+    view.focus();
+    onRevealConsumedRef.current?.();
+  }, [revealTarget, path]);
 
   return (
     <div className="relative h-full min-h-0 overflow-hidden bg-background">

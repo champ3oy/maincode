@@ -3,6 +3,7 @@ import {
   createRpc,
   type CompletionItemData,
   type CompletionsResult,
+  type DefinitionResult,
   type DetailsResult,
   type DiagnosticData,
   type FileEntry,
@@ -31,6 +32,7 @@ export interface TsClient {
   getCompletionDetails(path: string, offset: number, item: CompletionItemData): Promise<DetailsResult | null>;
   getDiagnostics(path: string): Promise<DiagnosticData[]>;
   getHover(path: string, offset: number): Promise<HoverResult | null>;
+  getDefinition(path: string, offset: number): Promise<DefinitionResult | null>;
   onTypesUpdated(fn: () => void): () => void;
 }
 
@@ -165,6 +167,11 @@ class Client implements TsClient {
   async getHover(path: string, offset: number): Promise<HoverResult | null> {
     if (!this.isReady) return null;
     return (await this.rpc!.request({ kind: "hover", path, offset }).catch(() => null)) as HoverResult | null;
+  }
+
+  async getDefinition(path: string, offset: number): Promise<DefinitionResult | null> {
+    if (!this.isReady) return null;
+    return (await this.rpc!.request({ kind: "definition", path, offset }).catch(() => null)) as DefinitionResult | null;
   }
 
   onTypesUpdated(fn: () => void): () => void {

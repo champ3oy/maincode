@@ -38,6 +38,16 @@ export interface HoverResult {
   docs?: string;
 }
 
+// Go-to-definition target. line/column are 1-based (CodeMirror convention),
+// mapped in the worker from TS's 0-based offset via the target source file's
+// line map. `path` is the target file's real absolute path — may point under
+// node_modules (a .d.ts); those files exist on disk and the editor can open them.
+export interface DefinitionResult {
+  path: string;
+  line: number;
+  column: number;
+}
+
 export type WorkerRequest =
   | { kind: "openProject"; root: string; files: { path: string; content: string }[]; tsconfigText: string | null }
   | { kind: "docChanged"; path: string; content: string; version: number }
@@ -45,6 +55,7 @@ export type WorkerRequest =
   | { kind: "completionDetails"; path: string; offset: number; entryName: string; source?: string; data?: unknown }
   | { kind: "diagnostics"; path: string }
   | { kind: "hover"; path: string; offset: number }
+  | { kind: "definition"; path: string; offset: number }
   | { kind: "filesLoaded"; files: FileEntry[] };
 
 export type WorkerNotification =

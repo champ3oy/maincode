@@ -58,6 +58,7 @@ import {
 } from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
 import { tsClient } from "@/lib/ts-worker/client";
+import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 
 function App() {
   const { rootPath, rootName, openFolder, closeFolder } = useWorkspace();
@@ -165,6 +166,22 @@ function App() {
   // Cursor position for status bar
   const [cursor, setCursor] = useState<{ line: number; col: number } | null>(
     null,
+  );
+
+  // Go-to-definition: after a Cmd/Ctrl+Click resolves a target, open the target
+  // file and stash a one-shot reveal so the mounted editor jumps to the line.
+  // The active editor consumes and clears it (onRevealConsumed).
+  const [revealTarget, setRevealTarget] = useState<DefinitionResult | null>(
+    null,
+  );
+  const handleGoToDefinition = useCallback(
+    (target: DefinitionResult) => {
+      // openFile activates an existing tab or opens a new one. Set the reveal
+      // after opening so the editor (already-mounted for same-file, or freshly
+      // mounted for cross-file) scrolls to the target line once it renders.
+      void openFile(target.path).then(() => setRevealTarget(target));
+    },
+    [openFile],
   );
 
   // Cmd+K / Cmd+P → toggle command palette; Ctrl+` → toggle terminal
@@ -786,6 +803,13 @@ function App() {
                   <EditorArea
                     onCursor={(line, col) => setCursor({ line, col })}
                     formatRoot={rootPath}
+                    onGoToDefinition={
+                      settings.editor.typescript
+                        ? handleGoToDefinition
+                        : undefined
+                    }
+                    revealTarget={revealTarget}
+                    onRevealConsumed={() => setRevealTarget(null)}
                   />
                 </div>
                 {sidebarTab === "changes" && (

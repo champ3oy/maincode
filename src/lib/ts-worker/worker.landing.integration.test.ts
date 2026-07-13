@@ -187,6 +187,11 @@ describe.skipIf(!landingExists)("ts-worker on the REAL landing project (integrat
       // ---- diagnostics loop, mirroring client.serveFiles + the on-demand loop.
       let pendingNeed: string[] | null = null;
       let typesUpdated = false;
+      // Total `typesUpdated` emissions across the whole run. In the real editor each one
+      // calls forceLinting → a fresh diagnostics query, so it is the ONLY mechanism that
+      // clears stale squiggles without the user typing or switching files. Change 1
+      // widens when this fires; asserting it is > 0 proves the re-lint signal is wired.
+      let typesUpdatedTotal = 0;
       const jsxRuntimeProbes: string[] = [];
       const tooLargeServed: string[] = [];
       fake.onNotify = (p) => {
@@ -198,6 +203,7 @@ describe.skipIf(!landingExists)("ts-worker on the REAL landing project (integrat
           }
         } else if (n.kind === "typesUpdated") {
           typesUpdated = true;
+          typesUpdatedTotal++;
         }
       };
 
@@ -221,6 +227,15 @@ describe.skipIf(!landingExists)("ts-worker on the REAL landing project (integrat
       const MAX_ROUNDS = 30;
       let diags: Diag[] = [];
       let rounds = 0;
+      // Change-1 guard: this loop is the client model. It only re-queries diagnostics
+      // in response to `needFiles` or `typesUpdated` — never a manual trigger (no user
+      // typing / tab switch). If the worker ever RE-RESOLVES already-loaded files to a
+      // clean state on a `changed === false` batch WITHOUT emitting `typesUpdated`, the
+      // loop breaks on the round BEFORE that state is observed and `diags` stays stale.
+      // So a clean final `diags` here proves the stale-squiggle re-lint signal fires.
+      // `converged` records that we exited via the natural break (all signals quiet),
+      // not by exhausting the round cap.
+      let converged = false;
       for (; rounds < MAX_ROUNDS; rounds++) {
         pendingNeed = null;
         typesUpdated = false;
@@ -237,7 +252,7 @@ describe.skipIf(!landingExists)("ts-worker on the REAL landing project (integrat
           // eslint-disable-next-line no-console
           console.log(
             `  round ${rounds}: needFiles=${(pendingNeed as string[] | null)?.length ?? 0} ` +
-              `diags=${diags.length}`,
+              `diags=${diags.length} typesUpdated=${typesUpdated}`,
           );
         }
         if (pendingNeed && (pendingNeed as string[]).length > 0) {
@@ -252,6 +267,7 @@ describe.skipIf(!landingExists)("ts-worker on the REAL landing project (integrat
           continue;
         }
         if (typesUpdated) continue;
+        converged = true;
         break;
       }
 
@@ -286,6 +302,15 @@ describe.skipIf(!landingExists)("ts-worker on the REAL landing project (integrat
       expect(messages).not.toMatch(/jsx-runtime/);
       expect(messages).not.toMatch(/Cannot find module 'react-router-dom'/);
       expect(rounds).toBeLessThan(MAX_ROUNDS);
+      // Change 1: the loop drained to a clean state via the natural break (no infinite
+      // typesUpdated → diagnostics → needFiles cycle) and, crucially, WITHOUT any manual
+      // re-lint trigger — the final clean diagnostics are the ones the editor would show
+      // on its own. `typesUpdatedTotal > 0` confirms the re-lint signal fired at least
+      // once (the exact mechanism that clears stale squiggles), so a `changed === false`
+      // re-resolution success no longer leaves errors lingering until the user types or
+      // switches files. The round cap (`rounds < MAX_ROUNDS`) proves no infinite loop.
+      expect(converged).toBe(true);
+      expect(typesUpdatedTotal).toBeGreaterThan(0);
     },
     60_000,
   );
