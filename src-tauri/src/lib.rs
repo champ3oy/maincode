@@ -4,6 +4,7 @@ mod watcher;
 mod fs_ops;
 mod pty;
 mod lsp;
+mod server_acquire;
 mod settings;
 #[cfg(target_os = "macos")]
 mod dock_menu;
