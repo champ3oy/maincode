@@ -137,6 +137,28 @@ TS client where a file opened before init never received `didOpen`.)
 - The extensions (linter/completion/hover/go-to-def) are otherwise unchanged —
   they already operate on whatever `IntelligenceClient` they're handed.
 
+## Settings: "Language Servers" panel
+
+A section in Settings lists every registered server and its install state, so
+users can see what's available and manage the cache (as VS Code and Zed do).
+
+- Rust command `lsp_server_status() -> ServerStatus[]`, where `ServerStatus =
+  { serverId, label, languages: string[], kind: "bundled"|"github-release"|"go-install",
+  state: "builtin"|"installed"|"missing"|"installing"|"error", version?,
+  sizeBytes? }`. It inspects `resources/lsp/` (bundled) and the cache dir
+  (downloaded) for each registered server.
+- UI plugs into the existing settings surface — one row per server:
+  - **builtin** (tsserver, pyright): "Built-in" badge, no actions.
+  - **installed** (cached): version + size, with **Update** (re-acquire) and
+    **Remove** (delete `<cache>/<serverId>/`).
+  - **missing**: "Installs automatically when you open a `<lang>` file" +
+    **Install now** (proactively runs `lsp_ensure_server`).
+  - **installing**: live progress from the `lsp-install-<serverId>` events.
+- New Rust commands: `lsp_server_status` and `lsp_remove_server(serverId)`
+  (delete the cache dir). Install/update reuse `lsp_ensure_server`.
+- The panel is read-mostly; it does not add persisted settings — server presence
+  is derived from the cache/resources, not from `settings.json`.
+
 ## Runtime toolchain caveats (documented, not hidden)
 
 Bundled/cached *servers* run out of the box, but some shell out to the language
@@ -181,6 +203,8 @@ so they can find `go`/`python`/`cargo`.
 4. Wire **rust-analyzer** + **clangd** (github-release download).
 5. Wire **gopls** (go-install).
 6. Per-language parity tests; PATH-augmentation for toolchain discovery.
+7. Settings "Language Servers" panel (`lsp_server_status` / `lsp_remove_server` +
+   the UI: status, Install now / Update / Remove, live install progress).
 
 ## Risks / open questions
 
