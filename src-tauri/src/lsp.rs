@@ -98,6 +98,42 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
             let bin = cache_dir()?.join("go").join("gopls");
             Ok((bin, vec![]))
         }
+        "bash" => {
+            let cli = resource(app, "lsp/server/node_modules/bash-language-server/out/cli.js")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "start".into()]))
+        }
+        "yaml" => {
+            let cli = resource(app, "lsp/server/node_modules/yaml-language-server/bin/yaml-language-server")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "json" => {
+            let cli = resource(app, "lsp/server/node_modules/vscode-langservers-extracted/bin/vscode-json-language-server")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "html" => {
+            let cli = resource(app, "lsp/server/node_modules/vscode-langservers-extracted/bin/vscode-html-language-server")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "css" => {
+            let cli = resource(app, "lsp/server/node_modules/vscode-langservers-extracted/bin/vscode-css-language-server")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "dockerfile" => {
+            let cli = resource(app, "lsp/server/node_modules/dockerfile-language-server-nodejs/bin/docker-langserver")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "svelte" => {
+            let cli = resource(app, "lsp/server/node_modules/svelte-language-server/bin/server.js")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "graphql" => {
+            let cli = resource(app, "lsp/server/node_modules/graphql-language-service-cli/bin/graphql.js")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "server".into(), "-m".into(), "stream".into()]))
+        }
+        "vue" => {
+            let cli = resource(app, "lsp/server/node_modules/@vue/language-server/bin/vue-language-server.js")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
         _ => Err(format!("unknown language server: {server_id}")),
     }
 }
@@ -179,7 +215,7 @@ pub async fn lsp_ensure_server(
 fn ensure_server_blocking(server_id: &str, app: &AppHandle) -> Result<(), String> {
     match server_id {
         // Bundled (node-based): nothing to acquire.
-        "typescript" | "python" => Ok(()),
+        "typescript" | "python" | "bash" | "yaml" | "json" | "html" | "css" | "dockerfile" | "svelte" | "graphql" | "vue" => Ok(()),
         "rust" => ensure_github_gz(
             app,
             "rust",
@@ -274,6 +310,15 @@ pub fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
     vec![
         entry("typescript", "TypeScript / JavaScript", &["ts", "tsx", "js", "jsx"], "bundled"),
         entry("python", "Python (Pyright)", &["py"], "bundled"),
+        entry("bash", "Bash", &["sh", "bash"], "bundled"),
+        entry("yaml", "YAML", &["yml", "yaml"], "bundled"),
+        entry("json", "JSON", &["json"], "bundled"),
+        entry("html", "HTML", &["html"], "bundled"),
+        entry("css", "CSS", &["css"], "bundled"),
+        entry("dockerfile", "Dockerfile", &["dockerfile"], "bundled"),
+        entry("svelte", "Svelte", &["svelte"], "bundled"),
+        entry("graphql", "GraphQL", &["graphql", "gql"], "bundled"),
+        entry("vue", "Vue", &["vue"], "bundled"),
         entry("rust", "Rust (rust-analyzer)", &["rs"], "github-release"),
         entry("cpp", "C / C++ (clangd)", &["c", "cpp"], "github-release"),
         entry("go", "Go (gopls)", &["go"], "go-install"),
