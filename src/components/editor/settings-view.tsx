@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { IconMinus, IconPlus, IconExternalLink } from "@tabler/icons-react";
 import { useSettings } from "@/hooks/use-settings";
 import type { ThemeChoice, FontChoice } from "@/hooks/use-settings";
+import { LanguageServersSection } from "./language-servers-section";
 
 const FONT_LABELS: Record<FontChoice, string> = {
   "app-mono": "App Mono",
@@ -17,7 +18,7 @@ interface SettingsViewProps {
   onEditJson: () => void;
 }
 
-type Category = "Appearance" | "Editor" | "Terminal" | "Source Control";
+type Category = "Appearance" | "Editor" | "Terminal" | "Source Control" | "Language Servers";
 
 interface RowDef {
   id: string;
@@ -144,7 +145,7 @@ function Row({ label, description, control }: RowProps) {
 // Main component
 // ---------------------------------------------------------------------------
 
-const CATEGORIES: Category[] = ["Appearance", "Editor", "Terminal", "Source Control"];
+const CATEGORIES: Category[] = ["Appearance", "Editor", "Terminal", "Source Control", "Language Servers"];
 
 const THEME_OPTIONS: { value: ThemeChoice; label: string }[] = [
   { value: "system", label: "System" },
@@ -434,16 +435,20 @@ export function SettingsView({ onEditJson }: SettingsViewProps) {
               <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 {activeCategory}
               </h2>
-              <div className="flex flex-col gap-2">
-                {visibleRows.map((r) => (
-                  <Row
-                    key={r.id}
-                    label={r.label}
-                    description={r.description}
-                    control={r.control}
-                  />
-                ))}
-              </div>
+              {activeCategory === "Language Servers" ? (
+                <LanguageServersSection />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {visibleRows.map((r) => (
+                    <Row
+                      key={r.id}
+                      label={r.label}
+                      description={r.description}
+                      control={r.control}
+                    />
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>
