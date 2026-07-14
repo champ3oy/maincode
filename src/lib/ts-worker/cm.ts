@@ -9,9 +9,10 @@ import {
   type Extension,
 } from "@codemirror/view";
 import { StateEffect, StateField } from "@codemirror/state";
-import { isTsWorkerPath, tsClient } from "./client";
+import { isTsWorkerPath } from "./client";
 import type { CompletionItemData } from "./protocol";
 import { renderHover } from "./hover-render";
+import type { IntelligenceClient } from "@/lib/intelligence";
 
 const KIND_MAP: Record<string, string> = {
   var: "variable", let: "variable", const: "variable", "local var": "variable",
@@ -22,7 +23,12 @@ const KIND_MAP: Record<string, string> = {
   type: "type", "type parameter": "type", parameter: "variable",
 };
 
-function toCompletion(item: CompletionItemData, path: string, offset: number): Completion {
+function toCompletion(
+  item: CompletionItemData,
+  path: string,
+  offset: number,
+  getClient: () => IntelligenceClient,
+): Completion {
   const c: Completion = {
     label: item.label,
     type: KIND_MAP[item.kind] ?? "text",
@@ -41,7 +47,7 @@ function toCompletion(item: CompletionItemData, path: string, offset: number): C
       // docAfterLabel identity check drops the edits if ANY change landed since,
       // and mapPos re-bases them through the label insertion. Do not "fix" this
       // into a stale-doc query.
-      void tsClient()
+      void getClient()
         .getCompletionDetails(path, offset, item)
         .then((details) => {
           if (!details || details.extraChanges.length === 0) return;
@@ -65,32 +71,40 @@ function toCompletion(item: CompletionItemData, path: string, offset: number): C
   return c;
 }
 
-export function tsCompletionSource(getPath: () => string): CompletionSource {
+export function tsCompletionSource(
+  getPath: () => string,
+  getClient: () => IntelligenceClient,
+): CompletionSource {
   return async (ctx) => {
     const path = getPath();
-    if (!isTsWorkerPath(path) || !tsClient().ready()) return null;
+    const client = getClient();
+    if (!isTsWorkerPath(path) || !client.ready()) return null;
     // require a word char or explicit trigger, mirroring completeAnyWord etiquette
     const word = ctx.matchBefore(/[\w$.]+$/);
     if (!word && !ctx.explicit) return null;
-    const res = await tsClient().getCompletions(path, ctx.pos);
+    const res = await client.getCompletions(path, ctx.pos);
     if (!res || res.items.length === 0) return null;
     const from = word && !word.text.endsWith(".") ? word.from + (word.text.lastIndexOf(".") + 1) : ctx.pos;
     const result: CompletionResult = {
       from: Math.min(from, ctx.pos),
-      options: res.items.map((i) => toCompletion(i, path, ctx.pos)),
+      options: res.items.map((i) => toCompletion(i, path, ctx.pos, getClient)),
       validFor: /^[\w$]*$/,
     };
     return result;
   };
 }
 
-export function tsLinterExtension(getPath: () => string): Extension {
+export function tsLinterExtension(
+  getPath: () => string,
+  getClient: () => IntelligenceClient,
+): Extension {
   return linter(
     async (view) => {
+      const client = getClient();
       const path = getPath();
-      if (!isTsWorkerPath(path) || !tsClient().ready()) return [];
+      if (!isTsWorkerPath(path) || !client.ready()) return [];
       const docLen = view.state.doc.length;
-      const diags = await tsClient().getDiagnostics(path);
+      const diags = await client.getDiagnostics(path);
       return diags
         .filter((d) => d.from <= docLen)
         .map((d): Diagnostic => ({ from: d.from, to: Math.min(d.to, docLen), severity: d.severity, message: d.message }));
@@ -223,11 +237,15 @@ export function tsGoToDefHoverAffordance(
   return [cmdHoverField, plugin, cmdHoverTheme];
 }
 
-export function tsHoverExtension(getPath: () => string): Extension {
+export function tsHoverExtension(
+  getPath: () => string,
+  getClient: () => IntelligenceClient,
+): Extension {
   return hoverTooltip(async (view, pos) => {
     const path = getPath();
-    if (!isTsWorkerPath(path) || !tsClient().ready()) return null;
-    const info = await tsClient().getHover(path, pos);
+    const client = getClient();
+    if (!isTsWorkerPath(path) || !client.ready()) return null;
+    const info = await client.getHover(path, pos);
     if (!info) return null;
     return {
       pos,

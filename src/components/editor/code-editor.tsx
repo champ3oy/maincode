@@ -13,7 +13,7 @@ import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
-import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
+import { isTsWorkerPath } from "@/lib/ts-worker/client";
 import {
   tsCompletionSource,
   tsLinterExtension,
@@ -22,6 +22,7 @@ import {
 } from "@/lib/ts-worker/cm";
 import { scriptKindForPath } from "@/lib/ts-worker/mapping";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
+import { intelligenceClient } from "@/lib/intelligence";
 import { FindWidget } from "./find-widget";
 
 // Constrain tooltip positioning (lint messages, TS hover, autocomplete) to the
@@ -116,7 +117,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript, engine } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -154,6 +155,12 @@ export function CodeEditor({
   const typescriptRef = useRef(typescript);
   typescriptRef.current = typescript;
 
+  const engineRef = useRef(engine);
+  engineRef.current = engine;
+  // Stable getter so extension closures always resolve the CURRENT engine's
+  // client without needing to be rebuilt when the setting changes.
+  const getClient = useRef(() => intelligenceClient(engineRef.current));
+
   const onGoToDefinitionRef = useRef(onGoToDefinition);
   onGoToDefinitionRef.current = onGoToDefinition;
   const onRevealConsumedRef = useRef(onRevealConsumed);
@@ -163,7 +170,7 @@ export function CodeEditor({
   // The lint/hover extensions are built fresh per lint-compartment build (see
   // buildLintExtensions) so a reconfigure installs a new linter() that re-runs.
   const tsExtensions = useRef({
-    source: tsCompletionSource(() => pathRef.current),
+    source: tsCompletionSource(() => pathRef.current, getClient.current),
   });
 
   /** Returns "ts" for .ts/.tsx/.mts/.cts, "js" for everything else with a TS worker path. */
@@ -188,8 +195,8 @@ export function CodeEditor({
               // compartment with a brand-new linter() forces CodeMirror to tear
               // down the idle lint plugin and run a fresh lint. Reusing the same
               // instances would not — see lint-refresh.test.ts.
-              linter: tsLinterExtension(() => pathRef.current),
-              hover: tsHoverExtension(() => pathRef.current),
+              linter: tsLinterExtension(() => pathRef.current, getClient.current),
+              hover: tsHoverExtension(() => pathRef.current, getClient.current),
               kind: tsKindForPath(docPath),
             }
           : undefined,
@@ -298,9 +305,10 @@ export function CodeEditor({
           if (update.docChanged) {
             const docString = update.state.doc.toString();
             onChangeRef.current(pathRef.current, docString);
-            // Notify the TS worker of the doc change so completions/diagnostics stay fresh.
+            // Notify the active intelligence engine of the doc change so
+            // completions/diagnostics stay fresh.
             if (isTsWorkerPath(pathRef.current)) {
-              tsClient().notifyDocChanged(pathRef.current, docString);
+              getClient.current().notifyDocChanged(pathRef.current, docString);
             }
             // Keep match count fresh when the document changes.
             searchHandlersRef.current.onEditorUpdate();
@@ -326,11 +334,12 @@ export function CodeEditor({
             const goto = onGoToDefinitionRef.current;
             if (!goto || !typescriptRef.current) return false;
             const p = pathRef.current;
-            if (!isTsWorkerPath(p) || !tsClient().ready()) return false;
+            const client = getClient.current();
+            if (!isTsWorkerPath(p) || !client.ready()) return false;
             const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
             if (offset == null) return false;
             event.preventDefault();
-            void tsClient()
+            void client
               .getDefinition(p, offset)
               .then((target) => {
                 if (target) goto(target);
@@ -360,9 +369,15 @@ export function CodeEditor({
     });
     viewRef.current = view;
     view.focus();
+    // Tell the active intelligence engine this document is now open.
+    const client = getClient.current();
+    if (client.ready()) client.notifyDocOpened(pathRef.current, content);
     return () => {
       view.destroy();
       viewRef.current = null;
+      // Best-effort: tell the engine the document is no longer visible.
+      // (Worker's notifyDocClosed is a no-op today; LSP tolerates open docs.)
+      getClient.current().notifyDocClosed(pathRef.current);
     };
     // The initial doc is only read once, on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -387,10 +402,16 @@ export function CodeEditor({
     const view = viewRef.current;
     if (!view || pathRef.current === path) return;
     statesRef.current.set(pathRef.current, view.state);
+    const client = getClient.current();
+    // The previous path is no longer the visible document — best-effort
+    // didClose (worker: no-op; LSP: tolerant of docs left open, but this
+    // keeps the signal accurate for engines that care).
+    client.notifyDocClosed(pathRef.current);
     pathRef.current = path;
     const cached = statesRef.current.get(path);
     view.setState(cached ?? makeStateRef.current(path, content));
     view.focus();
+    if (client.ready()) client.notifyDocOpened(path, content);
   }, [path, content]);
 
   // Keep the theme in sync (also re-applied after state swaps, which may
@@ -483,7 +504,7 @@ export function CodeEditor({
   // so the burst collapses into ONE reconfigure after types settle.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsub = tsClient().onTypesUpdated(() => {
+    const unsub = getClient.current().onTypesUpdated(() => {
       if (!isTsWorkerPath(pathRef.current)) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {

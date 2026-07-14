@@ -57,7 +57,7 @@ import {
   type PaletteCommand,
 } from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
-import { tsClient } from "@/lib/ts-worker/client";
+import { intelligenceClient } from "@/lib/intelligence";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 
 function App() {
@@ -90,14 +90,17 @@ function App() {
     setFormatRoot(rootPath);
   }, [rootPath, setFormatRoot]);
 
-  // Open/close the TypeScript project with the workspace (worker is lazy).
+  // Open/close the project on the selected intelligence engine with the
+  // workspace (worker is lazy; LSP dials out to the language server).
   useEffect(() => {
     if (rootPath && settings.editor.typescript) {
-      void tsClient().openProject(rootPath).catch(() => {});
+      void intelligenceClient(settings.editor.engine)
+        .openProject(rootPath)
+        .catch(() => {});
     } else {
-      tsClient().closeProject();
+      intelligenceClient(settings.editor.engine).closeProject();
     }
-  }, [rootPath, settings.editor.typescript]);
+  }, [rootPath, settings.editor.typescript, settings.editor.engine]);
 
   function clampFontSize(size: number): number {
     return Math.min(32, Math.max(8, Math.round(size)));
