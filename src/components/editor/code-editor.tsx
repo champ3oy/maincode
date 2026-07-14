@@ -13,7 +13,6 @@ import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
-import { isTsWorkerPath } from "@/lib/ts-worker/client";
 import {
   tsCompletionSource,
   tsLinterExtension,
@@ -22,7 +21,7 @@ import {
 } from "@/lib/ts-worker/cm";
 import { scriptKindForPath } from "@/lib/ts-worker/mapping";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
-import { intelligenceClient } from "@/lib/intelligence";
+import { clientForPath } from "@/lib/intelligence";
 import { FindWidget } from "./find-widget";
 
 // Constrain tooltip positioning (lint messages, TS hover, autocomplete) to the
@@ -155,15 +154,17 @@ export function CodeEditor({
   const typescriptRef = useRef(typescript);
   typescriptRef.current = typescript;
 
-  // Stable getter so extension closures resolve the intelligence client lazily.
-  const getClient = useRef(() => intelligenceClient());
+  // Stable getter so extension closures resolve the routed intelligence client
+  // lazily (returns null when the active path's language has no LSP server).
+  const getClient = useRef(() => clientForPath(pathRef.current));
 
   const onGoToDefinitionRef = useRef(onGoToDefinition);
   onGoToDefinitionRef.current = onGoToDefinition;
   const onRevealConsumedRef = useRef(onRevealConsumed);
   onRevealConsumedRef.current = onRevealConsumed;
 
-  // TS completion source — built once; self-gates on isTsWorkerPath + ready().
+  // TS completion source — built once; self-gates on getClient() returning a
+  // non-null, ready() client (null when the active path has no LSP server).
   // The lint/hover extensions are built fresh per lint-compartment build (see
   // buildLintExtensions) so a reconfigure installs a new linter() that re-runs.
   const tsExtensions = useRef({
@@ -302,11 +303,9 @@ export function CodeEditor({
           if (update.docChanged) {
             const docString = update.state.doc.toString();
             onChangeRef.current(pathRef.current, docString);
-            // Notify the active intelligence engine of the doc change so
-            // completions/diagnostics stay fresh.
-            if (isTsWorkerPath(pathRef.current)) {
-              getClient.current().notifyDocChanged(pathRef.current, docString);
-            }
+            // Notify the routed intelligence client (if any) of the doc change
+            // so completions/diagnostics stay fresh.
+            getClient.current()?.notifyDocChanged(pathRef.current, docString);
             // Keep match count fresh when the document changes.
             searchHandlersRef.current.onEditorUpdate();
           }
@@ -332,7 +331,7 @@ export function CodeEditor({
             if (!goto || !typescriptRef.current) return false;
             const p = pathRef.current;
             const client = getClient.current();
-            if (!isTsWorkerPath(p) || !client.ready()) return false;
+            if (!client || !client.ready()) return false;
             const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
             if (offset == null) return false;
             event.preventDefault();
@@ -366,15 +365,15 @@ export function CodeEditor({
     });
     viewRef.current = view;
     view.focus();
-    // Tell the active intelligence engine this document is now open.
+    // Tell the routed intelligence client (if any) this document is now open.
     const client = getClient.current();
-    if (client.ready()) client.notifyDocOpened(pathRef.current, content);
+    if (client?.ready()) client.notifyDocOpened(pathRef.current, content);
     return () => {
       view.destroy();
       viewRef.current = null;
       // Best-effort: tell the engine the document is no longer visible.
       // (Worker's notifyDocClosed is a no-op today; LSP tolerates open docs.)
-      getClient.current().notifyDocClosed(pathRef.current);
+      getClient.current()?.notifyDocClosed(pathRef.current);
     };
     // The initial doc is only read once, on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -399,16 +398,18 @@ export function CodeEditor({
     const view = viewRef.current;
     if (!view || pathRef.current === path) return;
     statesRef.current.set(pathRef.current, view.state);
-    const client = getClient.current();
     // The previous path is no longer the visible document — best-effort
     // didClose (worker: no-op; LSP: tolerant of docs left open, but this
-    // keeps the signal accurate for engines that care).
-    client.notifyDocClosed(pathRef.current);
+    // keeps the signal accurate for engines that care). Routed by the OLD
+    // path, since getClient reads pathRef.current.
+    getClient.current()?.notifyDocClosed(pathRef.current);
     pathRef.current = path;
     const cached = statesRef.current.get(path);
     view.setState(cached ?? makeStateRef.current(path, content));
     view.focus();
-    if (client.ready()) client.notifyDocOpened(path, content);
+    // Routed by the NEW path (pathRef.current was just updated above).
+    const c = getClient.current();
+    if (c?.ready()) c.notifyDocOpened(path, content);
   }, [path, content]);
 
   // Keep the theme in sync (also re-applied after state swaps, which may
@@ -501,8 +502,7 @@ export function CodeEditor({
   // so the burst collapses into ONE reconfigure after types settle.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsub = getClient.current().onTypesUpdated(() => {
-      if (!isTsWorkerPath(pathRef.current)) return;
+    const unsub = getClient.current()?.onTypesUpdated(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
@@ -521,7 +521,7 @@ export function CodeEditor({
     });
     return () => {
       if (timer) clearTimeout(timer);
-      unsub();
+      unsub?.();
     };
   }, []);
 

@@ -6,7 +6,6 @@ import type {
   DefinitionResult,
   HoverResult,
 } from "./ts-worker/protocol";
-import { LspClient } from "./lsp/client";
 
 /** The contract the LSP client implements and the CodeMirror layer consumes.
  *  Offsets are UTF-16 doc offsets. */
@@ -33,11 +32,6 @@ export interface IntelligenceClient {
   onTypesUpdated(fn: () => void): () => void;
 }
 
-let lspSingleton: LspClient | null = null;
-
-/** The editor's TypeScript/JS intelligence engine — the bundled tsserver over
- *  LSP, as a lazily-created singleton. */
-export function intelligenceClient(): IntelligenceClient {
-  if (!lspSingleton) lspSingleton = new LspClient("typescript");
-  return lspSingleton;
-}
+/** Per-language client manager: routes a file path to its language server's
+ *  lazily-created client (or null when the language has no server). */
+export { setProjectRoot, clientForPath, hasLspServer } from "./lsp/manager";

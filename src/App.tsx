@@ -57,7 +57,7 @@ import {
   type PaletteCommand,
 } from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
-import { intelligenceClient } from "@/lib/intelligence";
+import { setProjectRoot } from "@/lib/intelligence";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 
 function App() {
@@ -90,14 +90,10 @@ function App() {
     setFormatRoot(rootPath);
   }, [rootPath, setFormatRoot]);
 
-  // Open/close the project on the selected intelligence engine with the
-  // workspace (worker is lazy; LSP dials out to the language server).
+  // Set (or clear) the project root on the client manager so per-language LSP
+  // clients are lazily created/opened as files route to them.
   useEffect(() => {
-    if (rootPath && settings.editor.typescript) {
-      void intelligenceClient().openProject(rootPath).catch(() => {});
-    } else {
-      intelligenceClient().closeProject();
-    }
+    setProjectRoot(rootPath && settings.editor.typescript ? rootPath : null);
   }, [rootPath, settings.editor.typescript]);
 
   function clampFontSize(size: number): number {

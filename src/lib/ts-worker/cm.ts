@@ -27,7 +27,7 @@ function toCompletion(
   item: CompletionItemData,
   path: string,
   offset: number,
-  getClient: () => IntelligenceClient,
+  getClient: () => IntelligenceClient | null,
 ): Completion {
   const c: Completion = {
     label: item.label,
@@ -48,7 +48,7 @@ function toCompletion(
       // and mapPos re-bases them through the label insertion. Do not "fix" this
       // into a stale-doc query.
       void getClient()
-        .getCompletionDetails(path, offset, item)
+        ?.getCompletionDetails(path, offset, item)
         .then((details) => {
           if (!details || details.extraChanges.length === 0) return;
           // If the user typed between accepting the completion and the worker
@@ -73,12 +73,12 @@ function toCompletion(
 
 export function tsCompletionSource(
   getPath: () => string,
-  getClient: () => IntelligenceClient,
+  getClient: () => IntelligenceClient | null,
 ): CompletionSource {
   return async (ctx) => {
     const path = getPath();
     const client = getClient();
-    if (!isTsWorkerPath(path) || !client.ready()) return null;
+    if (!client || !client.ready()) return null;
     // require a word char or explicit trigger, mirroring completeAnyWord etiquette
     const word = ctx.matchBefore(/[\w$.]+$/);
     if (!word && !ctx.explicit) return null;
@@ -96,13 +96,13 @@ export function tsCompletionSource(
 
 export function tsLinterExtension(
   getPath: () => string,
-  getClient: () => IntelligenceClient,
+  getClient: () => IntelligenceClient | null,
 ): Extension {
   return linter(
     async (view) => {
       const client = getClient();
       const path = getPath();
-      if (!isTsWorkerPath(path) || !client.ready()) return [];
+      if (!client || !client.ready()) return [];
       const docLen = view.state.doc.length;
       const diags = await client.getDiagnostics(path);
       return diags
@@ -239,12 +239,12 @@ export function tsGoToDefHoverAffordance(
 
 export function tsHoverExtension(
   getPath: () => string,
-  getClient: () => IntelligenceClient,
+  getClient: () => IntelligenceClient | null,
 ): Extension {
   return hoverTooltip(async (view, pos) => {
     const path = getPath();
     const client = getClient();
-    if (!isTsWorkerPath(path) || !client.ready()) return null;
+    if (!client || !client.ready()) return null;
     const info = await client.getHover(path, pos);
     if (!info) return null;
     return {
