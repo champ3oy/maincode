@@ -325,6 +325,20 @@ pub fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
     ]
 }
 
+/// Per-server `initializationOptions` with resolved resource paths. Returns
+/// `null` for servers needing none. Vue (Volar) requires the bundled TypeScript
+/// SDK lib dir.
+#[tauri::command]
+pub fn lsp_init_options(server_id: String, app: AppHandle) -> Result<Option<serde_json::Value>, String> {
+    match server_id.as_str() {
+        "vue" => {
+            let tsdk = resource(&app, "lsp/server/node_modules/typescript/lib")?;
+            Ok(Some(serde_json::json!({ "typescript": { "tsdk": tsdk.to_string_lossy() } })))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[tauri::command]
 pub fn lsp_remove_server(server_id: String) -> Result<(), String> {
     // Only the known, Rust-authoritative server ids may be removed. This blocks

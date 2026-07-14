@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { LspClient } from "./client";
 import type { Transport } from "./transport";
+import { invoke } from "@tauri-apps/api/core";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve(null)) }));
 
 // A fake transport that records outgoing messages and lets the test push replies.
 function makeFake() {
@@ -33,7 +36,7 @@ describe("LspClient", () => {
     const fake = makeFake();
     const c = client(fake);
     const opening = c.openProject("/repo");
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r));
     const init = fake.sent.find((m) => m.method === "initialize");
     fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
     await opening;
@@ -47,7 +50,7 @@ describe("LspClient", () => {
     // Do NOT auto-reply to initialize yet: open a doc while still initializing.
     const c = new LspClient("typescript", async () => ({ id: 1, transport: fake.transport }));
     const opening = c.openProject("/repo");
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r));
     c.notifyDocOpened("/repo/a.ts", "const x = 1;\n"); // before ready
     expect(fake.sent.find((m) => m.method === "textDocument/didOpen")).toBeUndefined();
     // now let initialize resolve
@@ -62,7 +65,7 @@ describe("LspClient", () => {
     const fake = makeFake();
     const c = client(fake);
     const opening = c.openProject("/repo");
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r));
     const init1 = fake.sent.find((m) => m.method === "initialize");
     fake.push({ jsonrpc: "2.0", id: init1.id, result: { capabilities: {} } });
     await opening;
@@ -90,7 +93,7 @@ describe("LspClient", () => {
     const fake = makeFake();
     const c = client(fake);
     const opening = c.openProject("/repo");
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r));
     const init = fake.sent.find((m) => m.method === "initialize");
     fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
     await opening;
@@ -110,7 +113,7 @@ describe("LspClient", () => {
     const fake = makeFake();
     const c = client(fake);
     const opening = c.openProject("/repo");
-    await Promise.resolve();
+    await new Promise((r) => setTimeout(r));
     const init = fake.sent.find((m) => m.method === "initialize");
     fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
     await opening;
@@ -136,5 +139,28 @@ describe("LspClient", () => {
     expect(hover?.documentation).toContain("*@example*");
     expect(hover?.documentation).toContain("```ts");
     expect(hover?.documentation).not.toContain("const x: number"); // signature was extracted
+  });
+
+  it("merges per-server initializationOptions from lsp_init_options into initialize", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce({ typescript: { tsdk: "/x/lib" } });
+    const fake = makeFake();
+    const c = client(fake);
+    const opening = c.openProject("/repo");
+    await new Promise((r) => setTimeout(r));
+    const init = fake.sent.find((m) => m.method === "initialize");
+    expect(init.params.initializationOptions).toEqual({ typescript: { tsdk: "/x/lib" } });
+    fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
+    await opening;
+  });
+
+  it("omits initializationOptions when lsp_init_options resolves null", async () => {
+    const fake = makeFake();
+    const c = client(fake);
+    const opening = c.openProject("/repo");
+    await new Promise((r) => setTimeout(r));
+    const init = fake.sent.find((m) => m.method === "initialize");
+    expect("initializationOptions" in init.params).toBe(false);
+    fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
+    await opening;
   });
 });

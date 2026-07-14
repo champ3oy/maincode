@@ -7,6 +7,7 @@ import type {
   HoverResult,
 } from "../ts-worker/protocol";
 import type { IntelligenceClient } from "../intelligence";
+import { invoke } from "@tauri-apps/api/core";
 import { spawnServer, type Transport } from "./transport";
 import {
   offsetToPosition,
@@ -45,7 +46,10 @@ export class LspClient implements IntelligenceClient {
 
   async openProject(root: string): Promise<void> {
     this.closeProject();
-    const { transport } = await this.spawn(this.serverId, root);
+    const [{ transport }, initOptions] = await Promise.all([
+      this.spawn(this.serverId, root),
+      invoke<unknown>("lsp_init_options", { serverId: this.serverId }).catch(() => null),
+    ]);
     this.transport = transport;
     transport.onMessage((m) => this.onMessage(m));
     transport.onExit(() => (this.isReady = false));
@@ -62,6 +66,7 @@ export class LspClient implements IntelligenceClient {
         },
       },
       workspaceFolders: [{ uri: pathToUri(root), name: root }],
+      initializationOptions: initOptions ?? undefined,
     });
     this.notify("initialized", {});
     this.isReady = true;

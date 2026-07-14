@@ -108,6 +108,7 @@ pub fn run() {
             lsp::lsp_ensure_server,
             lsp::lsp_server_status,
             lsp::lsp_remove_server,
+            lsp::lsp_init_options,
             settings::read_settings,
             settings::write_settings,
             settings::settings_path,
