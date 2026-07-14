@@ -39,9 +39,24 @@ impl Default for LspState {
 }
 
 fn resource(app: &AppHandle, rel: &str) -> Result<std::path::PathBuf, String> {
-    app.path()
+    // Packaged builds: the bundled resource path exists and is used as-is.
+    let bundled = app
+        .path()
         .resolve(rel, tauri::path::BaseDirectory::Resource)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if bundled.exists() {
+        return Ok(bundled);
+    }
+    // `tauri dev` does not copy bundle resources into the dev resource dir, so
+    // fall back to the source tree (compile-time manifest dir → ../resources/…).
+    let dev = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources")
+        .join(rel);
+    if dev.exists() {
+        return Ok(dev);
+    }
+    // Neither exists — return the bundled path so the spawn error names it.
+    Ok(bundled)
 }
 
 #[tauri::command]
