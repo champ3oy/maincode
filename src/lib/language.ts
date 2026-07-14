@@ -14,6 +14,9 @@ export type LanguageKey =
   | "ini"
   | "shell"
   | "dockerfile"
+  | "vue"
+  | "svelte"
+  | "graphql"
   | "xml"
   | "sql"
   | "c"
@@ -58,6 +61,10 @@ const EXT_TO_KEY: Record<string, LanguageKey> = {
   bash: "shell",
   zsh: "shell",
   ksh: "shell",
+  vue: "vue",
+  svelte: "svelte",
+  graphql: "graphql",
+  gql: "graphql",
   xml: "xml",
   svg: "xml",
   xsl: "xml",
@@ -119,6 +126,9 @@ export const LANGUAGE_LABELS: Record<LanguageKey, string> = {
   ini: "INI",
   shell: "Shell",
   dockerfile: "Dockerfile",
+  vue: "Vue",
+  svelte: "Svelte",
+  graphql: "GraphQL",
   xml: "XML",
   sql: "SQL",
   c: "C",

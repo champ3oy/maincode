@@ -12,6 +12,15 @@ const SERVER_FOR_LANG: Partial<Record<LanguageKey, string>> = {
   go: "go",
   c: "cpp",
   cpp: "cpp",
+  shell: "bash",
+  yaml: "yaml",
+  json: "json",
+  html: "html",
+  css: "css",
+  dockerfile: "dockerfile",
+  svelte: "svelte",
+  graphql: "graphql",
+  vue: "vue",
 };
 
 export function serverIdForPath(path: string): string | null {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { makeManager } from "./manager";
+import { makeManager, serverIdForPath } from "./manager";
 
 describe("client manager", () => {
   it("routes by language and lazily creates one client per server", () => {
@@ -25,5 +25,18 @@ describe("client manager", () => {
     mgr.clientForPath("/a/f.ts");
     mgr.setProjectRoot("/b");
     expect(closes.length).toBe(1);
+  });
+
+  it("routes the node-server languages to their server ids", () => {
+    expect(serverIdForPath("a.vue")).toBe("vue");
+    expect(serverIdForPath("a.svelte")).toBe("svelte");
+    expect(serverIdForPath("schema.graphql")).toBe("graphql");
+    expect(serverIdForPath("q.gql")).toBe("graphql");
+    expect(serverIdForPath("deploy.yml")).toBe("yaml");
+    expect(serverIdForPath("config.json")).toBe("json");
+    expect(serverIdForPath("index.html")).toBe("html");
+    expect(serverIdForPath("styles.css")).toBe("css");
+    expect(serverIdForPath("Dockerfile")).toBe("dockerfile");
+    expect(serverIdForPath("run.sh")).toBe("bash");
   });
 });
