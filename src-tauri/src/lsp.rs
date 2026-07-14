@@ -9,16 +9,18 @@ struct LspSession {
     stdin: ChildStdin,
     window_label: String,
     root: String,
+    server_id: String,
     refcount: u32,
 }
 
 struct LspInner {
     sessions: HashMap<u32, LspSession>,
-    // Keyed by (window_label, root): each WINDOW gets its own server per root, so
-    // two windows on the same folder never share a session id (which would
-    // broadcast/misroute responses), and a window's teardown stops exactly its
-    // own sessions.
-    by_key: HashMap<(String, String), u32>,
+    // Keyed by (window_label, root, server_id): each WINDOW gets its own server
+    // per root per language server, so two windows on the same folder never
+    // share a session id (which would broadcast/misroute responses), a
+    // window's teardown stops exactly its own sessions, and multiple language
+    // servers can coexist on the same root.
+    by_key: HashMap<(String, String, String), u32>,
 }
 
 pub struct LspState {
@@ -59,19 +61,51 @@ fn resource(app: &AppHandle, rel: &str) -> Result<std::path::PathBuf, String> {
     Ok(bundled)
 }
 
+/// Resolve a serverId to its (command, args). Only known servers are spawnable,
+/// so the frontend can never request an arbitrary executable. Cached-binary
+/// servers are added in later tasks; here only the bundled node-based ones.
+fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let node = resource(app, "lsp/node")?;
+    match server_id {
+        "typescript" => {
+            let cli = resource(app, "lsp/server/node_modules/typescript-language-server/lib/cli.mjs")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        "python" => {
+            let cli = resource(app, "lsp/server/node_modules/pyright/langserver.index.js")?;
+            Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
+        }
+        _ => Err(format!("unknown language server: {server_id}")),
+    }
+}
+
+/// A PATH that includes the user's login-shell PATH, so spawned language servers
+/// can find toolchains (go/python/cargo) even when the app was launched from
+/// Finder with a minimal PATH. Mirrors pty.rs's login-shell rationale.
+fn login_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let out = std::process::Command::new(shell)
+        .args(["-lic", "printf %s \"$PATH\""])
+        .output()
+        .ok()?;
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if p.is_empty() { None } else { Some(p) }
+}
+
 #[tauri::command]
 pub fn lsp_spawn(
+    server_id: String,
     root: String,
     app: AppHandle,
     window: tauri::WebviewWindow,
     state: State<LspState>,
 ) -> Result<u32, String> {
     let label = window.label().to_string();
-    let key = (label.clone(), root.clone());
+    let key = (label.clone(), root.clone(), server_id.clone());
     // Single lock over both maps, held across spawn so check-reuse-or-insert is
     // atomic: no lock-order inversion (one lock) and no TOCTOU duplicate server
-    // for the same (window, root). Spawn is rare (once per project open), so
-    // briefly holding the lock across it is acceptable.
+    // for the same (window, root, server_id). Spawn is rare (once per project
+    // open), so briefly holding the lock across it is acceptable.
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
     if let Some(&id) = inner.by_key.get(&key) {
         if let Some(s) = inner.sessions.get_mut(&id) {
@@ -80,21 +114,19 @@ pub fn lsp_spawn(
         }
     }
 
-    let node = resource(&app, "lsp/node")?;
-    let cli = resource(
-        &app,
-        "lsp/server/node_modules/typescript-language-server/lib/cli.mjs",
-    )?;
-
-    let mut child = Command::new(node)
-        .arg(cli)
-        .arg("--stdio")
+    let (command, args) = resolve_command(&app, &server_id)?;
+    let mut cmd = Command::new(command);
+    cmd.args(&args)
         .current_dir(&root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(path) = login_path() {
+        cmd.env("PATH", path);
+    }
+    let mut child = cmd
         .spawn()
-        .map_err(|e| format!("failed to spawn LSP server: {e}"))?;
+        .map_err(|e| format!("failed to spawn {server_id}: {e}"))?;
 
     let stdin = child.stdin.take().ok_or("no stdin")?;
     let id = state.next_id.fetch_add(1, Ordering::SeqCst);
@@ -133,6 +165,7 @@ pub fn lsp_spawn(
             stdin,
             window_label: label,
             root,
+            server_id,
             refcount: 1,
         },
     );
@@ -161,7 +194,9 @@ pub fn lsp_stop(id: u32, state: State<LspState>) -> Result<(), String> {
     };
     if should_remove {
         if let Some(removed) = inner.sessions.remove(&id) {
-            inner.by_key.remove(&(removed.window_label, removed.root));
+            inner
+                .by_key
+                .remove(&(removed.window_label, removed.root, removed.server_id));
             drop(removed.stdin); // close stdin → server exits → reader thread reaps
         }
     }
@@ -185,7 +220,9 @@ pub fn stop_window(label: &str, state: State<LspState>) {
         .collect();
     for id in ids {
         if let Some(removed) = inner.sessions.remove(&id) {
-            inner.by_key.remove(&(removed.window_label, removed.root));
+            inner
+                .by_key
+                .remove(&(removed.window_label, removed.root, removed.server_id));
             drop(removed.stdin);
         }
     }
