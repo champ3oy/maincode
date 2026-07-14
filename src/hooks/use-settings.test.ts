@@ -89,7 +89,7 @@ describe("mergeSettings", () => {
   it("handles completely valid full settings object", () => {
     const full = {
       theme: "dark",
-      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false, formatOnSave: true, typescript: false },
+      editor: { fontSize: 14, fontFamily: "courier", tabSize: 4, wordWrap: true, autocomplete: false, linting: false, formatOnSave: true, typescript: false, engine: "lsp" },
       terminal: { fontSize: 14 },
       diff: { fontSize: 15, fontFamily: "system-mono", wordWrap: true },
     };
@@ -138,5 +138,10 @@ describe("mergeSettings", () => {
     expect(mergeSettings({}).editor.typescript).toBe(true);
     expect(mergeSettings({ editor: { typescript: false } }).editor.typescript).toBe(false);
     expect(mergeSettings({ editor: { typescript: "x" } }).editor.typescript).toBe(true);
+  });
+
+  it("defaults editor.engine to worker and accepts lsp", () => {
+    expect(mergeSettings({}).editor.engine).toBe("worker");
+    expect(mergeSettings({ editor: { engine: "lsp" } }).editor.engine).toBe("lsp");
   });
 });

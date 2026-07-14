@@ -6,6 +6,8 @@ import type {
   DefinitionResult,
   HoverResult,
 } from "./ts-worker/protocol";
+import { LspClient } from "./lsp/client";
+import { tsClient } from "./ts-worker/client";
 
 /** The contract both the in-browser worker and the LSP client implement, so the
  *  CodeMirror layer is engine-agnostic. Offsets are UTF-16 doc offsets. */
@@ -30,4 +32,15 @@ export interface IntelligenceClient {
   getDefinition(path: string, offset: number): Promise<DefinitionResult | null>;
   /** Fires when pushed diagnostics arrive so the editor re-lints. */
   onTypesUpdated(fn: () => void): () => void;
+}
+
+let lspSingleton: LspClient | null = null;
+
+/** Returns the active intelligence engine for the current setting. */
+export function intelligenceClient(engine: "worker" | "lsp"): IntelligenceClient {
+  if (engine === "lsp") {
+    if (!lspSingleton) lspSingleton = new LspClient();
+    return lspSingleton;
+  }
+  return tsClient();
 }

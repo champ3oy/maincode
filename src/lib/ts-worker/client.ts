@@ -31,7 +31,9 @@ export interface TsClient {
   openProject(root: string): Promise<void>;
   closeProject(): void;
   ready(): boolean;
+  notifyDocOpened(path: string, content: string): void;
   notifyDocChanged(path: string, content: string): void;
+  notifyDocClosed(path: string): void;
   getCompletions(path: string, offset: number): Promise<CompletionsResult | null>;
   getCompletionDetails(path: string, offset: number, item: CompletionItemData): Promise<DetailsResult | null>;
   getDiagnostics(path: string): Promise<DiagnosticData[]>;
@@ -144,6 +146,14 @@ class Client implements TsClient {
 
   ready(): boolean {
     return this.isReady;
+  }
+
+  notifyDocOpened(path: string, content: string): void {
+    // Worker loads files via docChanged; opening is the same as a first change.
+    this.notifyDocChanged(path, content);
+  }
+  notifyDocClosed(_path: string): void {
+    // Worker keeps files in its VFS; nothing to release.
   }
 
   notifyDocChanged(path: string, content: string): void {

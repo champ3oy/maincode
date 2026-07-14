@@ -27,6 +27,7 @@ export interface Settings {
     linting: boolean;
     formatOnSave: boolean;
     typescript: boolean;
+    engine: "worker" | "lsp";
   };
   terminal: {
     fontSize: number;
@@ -60,7 +61,7 @@ export type DeepPartial<T> = T extends object
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "system",
-  editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false, autocomplete: true, linting: true, formatOnSave: false, typescript: true },
+  editor: { fontSize: 13, fontFamily: "app-mono", tabSize: 2, wordWrap: false, autocomplete: true, linting: true, formatOnSave: false, typescript: true, engine: "worker" },
   terminal: { fontSize: 12 },
   diff: { fontSize: 13, fontFamily: "app-mono", wordWrap: false },
 };
@@ -123,6 +124,7 @@ export function mergeSettings(raw: unknown): Settings {
   const editorLinting = typeof re.linting === "boolean" ? re.linting : d.editor.linting;
   const editorFormatOnSave = typeof re.formatOnSave === "boolean" ? re.formatOnSave : d.editor.formatOnSave;
   const editorTypescript = typeof re.typescript === "boolean" ? re.typescript : d.editor.typescript;
+  const editorEngine = re.engine === "lsp" ? "lsp" : d.editor.engine;
 
   // terminal
   const rt = (typeof r.terminal === "object" && r.terminal !== null)
@@ -144,7 +146,7 @@ export function mergeSettings(raw: unknown): Settings {
 
   return {
     theme,
-    editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap, autocomplete: editorAutocomplete, linting: editorLinting, formatOnSave: editorFormatOnSave, typescript: editorTypescript },
+    editor: { fontSize: editorFontSize, fontFamily, tabSize, wordWrap: editorWordWrap, autocomplete: editorAutocomplete, linting: editorLinting, formatOnSave: editorFormatOnSave, typescript: editorTypescript, engine: editorEngine },
     terminal: { fontSize: terminalFontSize },
     diff: { fontSize: diffFontSize, fontFamily: diffFontFamily, wordWrap: diffWordWrap },
   };
@@ -167,6 +169,7 @@ function deepMergePartial(current: Settings, partial: DeepPartial<Settings>): Se
       linting: partial.editor?.linting ?? current.editor.linting,
       formatOnSave: partial.editor?.formatOnSave ?? current.editor.formatOnSave,
       typescript: partial.editor?.typescript ?? current.editor.typescript,
+      engine: partial.editor?.engine === "lsp" ? "lsp" : current.editor.engine,
     },
     terminal: {
       fontSize: partial.terminal?.fontSize ?? current.terminal.fontSize,
