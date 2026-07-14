@@ -145,28 +145,43 @@ fn ensure_github_gz(app: &AppHandle, server_id: &str, bin_name: &str, url: &str)
 /// first-time opens from separate windows never interleave writes to the same
 /// files; the per-arm `if bin.exists() { return Ok(()) }` acts as the
 /// double-check once a waiter acquires the lock.
+/// Ensure a language server's binary is present, downloading/installing on
+/// first use. `async` + `spawn_blocking` so the blocking download/extract (and
+/// `go install`, which compiles gopls and takes tens of seconds) NEVER runs on
+/// the main thread — a synchronous Tauri command runs on the UI thread and would
+/// freeze the whole app (including the "Installing…" indicator, which then can't
+/// even paint). Serialized per server id via `state.install_locks`; the per-arm
+/// `bin.exists()` is the double-check once a waiter acquires the lock.
 #[tauri::command]
-pub fn lsp_ensure_server(
+pub async fn lsp_ensure_server(
     server_id: String,
     app: AppHandle,
-    state: State<LspState>,
+    state: State<'_, LspState>,
 ) -> Result<(), String> {
-    // Serialize acquisition per server id. Bundled (ts/python) arms return before
-    // any FS work so acquiring the lock for them is harmless. Held across the
-    // blocking download/extract — safe because this is a sync Tauri command on a
-    // worker thread, and this lock is separate from `state.inner` (the sessions
-    // mutex), so the download never blocks LSP message routing.
+    // Clone the per-id lock Arc on the calling side (cheap), then move it into
+    // the blocking task and hold it there for the whole download. Kept SEPARATE
+    // from `state.inner` so the download never holds the sessions mutex.
     let lock = {
         let mut m = state.install_locks.lock().map_err(|_| "lock poisoned")?;
         m.entry(server_id.clone()).or_default().clone()
     };
-    let _guard = lock.lock().map_err(|_| "install lock poisoned")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = lock.lock().map_err(|_| "install lock poisoned")?;
+        ensure_server_blocking(&server_id, &app)
+    })
+    .await
+    .map_err(|e| format!("install task panicked: {e}"))?
+}
 
-    match server_id.as_str() {
+/// The blocking half of `lsp_ensure_server`, run on a blocking thread. Bundled
+/// (node-based) arms are no-ops; download/go-install arms fetch + extract into
+/// the cache and emit `lsp-install-<id>` progress events.
+fn ensure_server_blocking(server_id: &str, app: &AppHandle) -> Result<(), String> {
+    match server_id {
         // Bundled (node-based): nothing to acquire.
         "typescript" | "python" => Ok(()),
         "rust" => ensure_github_gz(
-            &app,
+            app,
             "rust",
             "rust-analyzer",
             &format!(

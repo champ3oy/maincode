@@ -10,9 +10,18 @@ interface ServerStatus {
   state: "builtin" | "installed" | "missing";
 }
 
+/** Friendly label for a raw `lsp-install-<id>` progress phase. */
+const PHASE_LABEL: Record<string, string> = {
+  download: "Downloading…",
+  extract: "Extracting…",
+  install: "Installing…",
+};
+const phaseLabel = (phase: string) => PHASE_LABEL[phase] ?? "Installing…";
+
 export function LanguageServersSection() {
   const [servers, setServers] = useState<ServerStatus[]>([]);
   const [busy, setBusy] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const refresh = () => void invoke<ServerStatus[]>("lsp_server_status").then(setServers).catch(() => {});
   useEffect(() => { refresh(); }, []);
@@ -26,7 +35,20 @@ export function LanguageServersSection() {
     return () => { void Promise.all(uns).then((fns) => fns.forEach((f) => f())); };
   }, [servers]);
 
-  const install = (id: string) => { setBusy((b) => ({ ...b, [id]: "download" })); void invoke("lsp_ensure_server", { serverId: id }).then(refresh).catch(() => setBusy((b) => { const n = { ...b }; delete n[id]; return n; })); };
+  // Acquisition runs on a background thread in Rust, so this returns immediately
+  // and the "Installing…" state paints without freezing the UI. `kind` seeds a
+  // sensible first label (go compiles rather than downloads) before the first
+  // progress event arrives.
+  const install = (id: string, kind: string) => {
+    setErrors((e) => { const n = { ...e }; delete n[id]; return n; });
+    setBusy((b) => ({ ...b, [id]: kind === "go-install" ? "install" : "download" }));
+    void invoke("lsp_ensure_server", { serverId: id })
+      .then(refresh)
+      .catch((err) => {
+        setBusy((b) => { const n = { ...b }; delete n[id]; return n; });
+        setErrors((e) => ({ ...e, [id]: String(err) }));
+      });
+  };
   const remove = (id: string) => void invoke("lsp_remove_server", { serverId: id }).then(refresh).catch(() => {});
 
   return (
@@ -37,15 +59,26 @@ export function LanguageServersSection() {
             <p className="text-sm font-medium">{s.label}</p>
             <p className="text-xs text-muted-foreground mt-0.5">.{s.languages.join(", .")}</p>
           </div>
-          <div className="shrink-0 text-xs">
+          <div className="flex shrink-0 items-center gap-2 text-xs">
             {busy[s.server_id] ? (
-              <span className="text-muted-foreground">Installing… ({busy[s.server_id]})</span>
+              <span className="animate-pulse text-muted-foreground">{phaseLabel(busy[s.server_id])}</span>
             ) : s.state === "builtin" ? (
               <span className="rounded border border-border px-2 py-1 text-muted-foreground">Built-in</span>
-            ) : s.state === "installed" ? (
-              <button className="rounded border border-border px-2.5 py-1 hover:bg-accent" onClick={() => remove(s.server_id)}>Remove</button>
             ) : (
-              <button className="rounded border border-border px-2.5 py-1 hover:bg-accent" onClick={() => install(s.server_id)}>Install</button>
+              <>
+                {errors[s.server_id] ? (
+                  <span className="max-w-[16rem] truncate text-destructive" title={errors[s.server_id]}>
+                    {errors[s.server_id]}
+                  </span>
+                ) : null}
+                {s.state === "installed" ? (
+                  <button className="rounded border border-border px-2.5 py-1 hover:bg-accent" onClick={() => remove(s.server_id)}>Remove</button>
+                ) : (
+                  <button className="rounded border border-border px-2.5 py-1 hover:bg-accent" onClick={() => install(s.server_id, s.kind)}>
+                    {errors[s.server_id] ? "Retry" : "Install"}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
