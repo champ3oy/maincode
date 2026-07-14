@@ -11,11 +11,6 @@ function makeFake() {
     send: async (m) => {
       const msg = JSON.parse(m);
       sent.push(msg);
-      // Auto-reply to initialize immediately so openProject resolves without
-      // fragile microtask timing in the test.
-      if (msg.method === "initialize") {
-        push({ jsonrpc: "2.0", id: msg.id, result: { capabilities: {} } });
-      }
     },
     onMessage(cb) {
       onMsg = cb;
@@ -30,23 +25,47 @@ function makeFake() {
 }
 
 function client(fake: ReturnType<typeof makeFake>) {
-  return new LspClient(async () => ({ id: 1, transport: fake.transport }));
+  return new LspClient("typescript", async () => ({ id: 1, transport: fake.transport }));
 }
 
 describe("LspClient", () => {
   it("initializes and reports ready", async () => {
     const fake = makeFake();
     const c = client(fake);
-    await c.openProject("/repo");
+    const opening = c.openProject("/repo");
+    await Promise.resolve();
+    const init = fake.sent.find((m) => m.method === "initialize");
+    fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
+    await opening;
     expect(c.ready()).toBe(true);
     expect(fake.sent[0].method).toBe("initialize");
     expect(fake.sent.find((m) => m.method === "initialized")).toBeTruthy();
   });
 
+  it("buffers didOpen for docs opened before init and replays after initialize", async () => {
+    const fake = makeFake();
+    // Do NOT auto-reply to initialize yet: open a doc while still initializing.
+    const c = new LspClient("typescript", async () => ({ id: 1, transport: fake.transport }));
+    const opening = c.openProject("/repo");
+    await Promise.resolve();
+    c.notifyDocOpened("/repo/a.ts", "const x = 1;\n"); // before ready
+    expect(fake.sent.find((m) => m.method === "textDocument/didOpen")).toBeUndefined();
+    // now let initialize resolve
+    const init = fake.sent.find((m) => m.method === "initialize");
+    fake.push({ jsonrpc: "2.0", id: init!.id, result: { capabilities: {} } });
+    await opening;
+    const didOpen = fake.sent.find((m) => m.method === "textDocument/didOpen");
+    expect(didOpen?.params.textDocument.uri).toBe("file:///repo/a.ts");
+  });
+
   it("maps pushed publishDiagnostics to DiagnosticData offsets", async () => {
     const fake = makeFake();
     const c = client(fake);
-    await c.openProject("/repo");
+    const opening = c.openProject("/repo");
+    await Promise.resolve();
+    const init1 = fake.sent.find((m) => m.method === "initialize");
+    fake.push({ jsonrpc: "2.0", id: init1.id, result: { capabilities: {} } });
+    await opening;
     c.notifyDocOpened("/repo/a.ts", "const x = 1;\nlet y = 2;\n");
     const fired = vi.fn();
     c.onTypesUpdated(fired);
@@ -70,7 +89,11 @@ describe("LspClient", () => {
   it("resolves getDefinition to a 1-based path/line/column", async () => {
     const fake = makeFake();
     const c = client(fake);
-    await c.openProject("/repo");
+    const opening = c.openProject("/repo");
+    await Promise.resolve();
+    const init = fake.sent.find((m) => m.method === "initialize");
+    fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
+    await opening;
     c.notifyDocOpened("/repo/a.ts", "import x from './b';\n");
     const p = c.getDefinition("/repo/a.ts", 7);
     await Promise.resolve();
@@ -86,7 +109,11 @@ describe("LspClient", () => {
   it("splits hover markdown: leading code fence → signature, rest → documentation", async () => {
     const fake = makeFake();
     const c = client(fake);
-    await c.openProject("/repo");
+    const opening = c.openProject("/repo");
+    await Promise.resolve();
+    const init = fake.sent.find((m) => m.method === "initialize");
+    fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
+    await opening;
     c.notifyDocOpened("/repo/a.ts", "const x = 1;\n");
     const p = c.getHover("/repo/a.ts", 6);
     await Promise.resolve();

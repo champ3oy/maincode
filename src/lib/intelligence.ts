@@ -38,6 +38,6 @@ let lspSingleton: LspClient | null = null;
 /** The editor's TypeScript/JS intelligence engine — the bundled tsserver over
  *  LSP, as a lazily-created singleton. */
 export function intelligenceClient(): IntelligenceClient {
-  if (!lspSingleton) lspSingleton = new LspClient();
+  if (!lspSingleton) lspSingleton = new LspClient("typescript");
   return lspSingleton;
 }

@@ -65,7 +65,7 @@ function nodeTransport(root: string): { id: number; transport: Transport } {
 
 describe.skipIf(!ok)("LSP parity on real lugway monorepo", () => {
   it("resolves @/ alias and go-to-definition in mobile", async () => {
-    const c = new LspClient(async () => nodeTransport(ROOT));
+    const c = new LspClient("typescript", async () => nodeTransport(ROOT));
     await c.openProject(ROOT);
     const file = `${ROOT}/mobile/app/wallet/top-up.tsx`;
     const fs = await import("node:fs");

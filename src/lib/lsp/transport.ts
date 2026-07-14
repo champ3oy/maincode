@@ -10,8 +10,11 @@ export interface Transport {
 }
 
 /** Spawn a server for `root` and return a Transport bound to its session id. */
-export async function spawnServer(root: string): Promise<{ id: number; transport: Transport }> {
-  const id = await invoke<number>("lsp_spawn", { root });
+export async function spawnServer(
+  serverId: string,
+  root: string,
+): Promise<{ id: number; transport: Transport }> {
+  const id = await invoke<number>("lsp_spawn", { serverId, root });
   const msgListeners = new Set<(m: string) => void>();
   const exitListeners = new Set<() => void>();
 

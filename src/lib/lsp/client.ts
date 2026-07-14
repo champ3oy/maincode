@@ -19,7 +19,7 @@ import {
   type LspLocation,
 } from "./protocol";
 
-type Spawn = (root: string) => Promise<{ id: number; transport: Transport }>;
+type Spawn = (serverId: string, root: string) => Promise<{ id: number; transport: Transport }>;
 
 interface Pending {
   resolve: (v: unknown) => void;
@@ -33,15 +33,19 @@ export class LspClient implements IntelligenceClient {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly docs = new Map<string, string>(); // path -> current text
+  private readonly openedOnServer = new Set<string>(); // paths for which didOpen has been sent
   private readonly diagnostics = new Map<string, LspDiagnostic[]>(); // uri -> diags
   private readonly typesListeners = new Set<() => void>();
   private isReady = false;
 
-  constructor(private readonly spawn: Spawn = spawnServer) {}
+  constructor(
+    private readonly serverId: string,
+    private readonly spawn: Spawn = spawnServer,
+  ) {}
 
   async openProject(root: string): Promise<void> {
     this.closeProject();
-    const { transport } = await this.spawn(root);
+    const { transport } = await this.spawn(this.serverId, root);
     this.transport = transport;
     transport.onMessage((m) => this.onMessage(m));
     transport.onExit(() => (this.isReady = false));
@@ -61,12 +65,15 @@ export class LspClient implements IntelligenceClient {
     });
     this.notify("initialized", {});
     this.isReady = true;
+    // Replay didOpen for any docs opened while we were still initializing.
+    for (const [path, content] of this.docs) this.sendDidOpen(path, content);
   }
 
   closeProject(): void {
     this.isReady = false;
     this.pending.clear();
     this.docs.clear();
+    this.openedOnServer.clear();
     this.diagnostics.clear();
     this.transport?.dispose();
     this.transport = null;
@@ -76,27 +83,36 @@ export class LspClient implements IntelligenceClient {
     return this.isReady;
   }
 
-  notifyDocOpened(path: string, content: string): void {
-    if (!this.isReady) return;
-    this.docs.set(path, content);
+  private sendDidOpen(path: string, content: string): void {
     this.notify("textDocument/didOpen", {
       textDocument: { uri: pathToUri(path), languageId: languageId(path), version: 1, text: content },
     });
+    this.openedOnServer.add(path);
+  }
+
+  notifyDocOpened(path: string, content: string): void {
+    this.docs.set(path, content);
+    if (this.isReady) this.sendDidOpen(path, content);
   }
 
   notifyDocChanged(path: string, content: string): void {
-    if (!this.isReady) return;
     this.docs.set(path, content);
-    this.notify("textDocument/didChange", {
-      textDocument: { uri: pathToUri(path), version: Date.now() },
-      contentChanges: [{ text: content }], // full-document sync
-    });
+    if (!this.isReady) return;
+    if (this.openedOnServer.has(path)) {
+      this.notify("textDocument/didChange", {
+        textDocument: { uri: pathToUri(path), version: Date.now() },
+        contentChanges: [{ text: content }], // full-document sync
+      });
+    } else {
+      this.sendDidOpen(path, content);
+    }
   }
 
   notifyDocClosed(path: string): void {
-    if (!this.isReady) return;
     this.docs.delete(path);
-    this.notify("textDocument/didClose", { textDocument: { uri: pathToUri(path) } });
+    if (this.isReady && this.openedOnServer.delete(path)) {
+      this.notify("textDocument/didClose", { textDocument: { uri: pathToUri(path) } });
+    }
   }
 
   async getDiagnostics(path: string): Promise<DiagnosticData[]> {
