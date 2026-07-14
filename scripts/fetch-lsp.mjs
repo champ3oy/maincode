@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 const NODE_VERSION = "v22.22.1";
 const TLS_VERSION = "5.3.0";
 const TS_VERSION = "5.9.2";
+const PYRIGHT_VERSION = "1.1.411";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "resources", "lsp");
@@ -47,10 +48,11 @@ function fetchNode() {
 
 function installServer() {
   const cli = join(serverDir, "node_modules", "typescript-language-server", "lib", "cli.mjs");
-  if (existsSync(cli)) return;
+  const pyright = join(serverDir, "node_modules", "pyright", "langserver.index.js");
+  if (existsSync(cli) && existsSync(pyright)) return;
   mkdirSync(serverDir, { recursive: true });
   execSync(
-    `npm init -y && npm install --omit=dev typescript-language-server@${TLS_VERSION} typescript@${TS_VERSION}`,
+    `npm init -y && npm install --omit=dev typescript-language-server@${TLS_VERSION} typescript@${TS_VERSION} pyright@${PYRIGHT_VERSION}`,
     { cwd: serverDir, stdio: "inherit" },
   );
 }
