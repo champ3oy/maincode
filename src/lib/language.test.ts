@@ -30,4 +30,25 @@ describe("languageKeyForPath", () => {
     expect(languageKeyForPath("file.xyz")).toBeNull();
     expect(languageKeyForPath(".gitignore")).toBeNull();
   });
+
+  it("maps config + long-tail extensions", () => {
+    expect(languageKeyForPath("Cargo.toml")).toBe("toml");
+    expect(languageKeyForPath("app.ini")).toBe("ini");
+    expect(languageKeyForPath("run.sh")).toBe("shell");
+    expect(languageKeyForPath("q.sql")).toBe("sql");
+    expect(languageKeyForPath("main.go")).toBe("go");
+    expect(languageKeyForPath("a.cpp")).toBe("cpp");
+    expect(languageKeyForPath("A.rb")).toBe("ruby");
+    expect(languageKeyForPath("pom.xml")).toBe("xml");
+  });
+
+  it("maps extension-less and dotfile config by whole name", () => {
+    expect(languageKeyForPath("Dockerfile")).toBe("dockerfile");
+    expect(languageKeyForPath("api.dockerfile")).toBe("dockerfile");
+    expect(languageKeyForPath(".env")).toBe("ini");
+    expect(languageKeyForPath(".env.local")).toBe("ini");
+    expect(languageKeyForPath("app/.env.production")).toBe("ini");
+    expect(languageKeyForPath(".bashrc")).toBe("shell");
+    expect(languageKeyForPath(".editorconfig")).toBe("ini");
+  });
 });

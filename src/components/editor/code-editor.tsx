@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Compartment, EditorState, EditorSelection, Prec } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, tooltips } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
@@ -13,7 +13,6 @@ import { languageKeyForPath } from "@/lib/language";
 import { useSettings, FONT_STACKS } from "@/hooks/use-settings";
 import { useEditorSearch } from "@/hooks/use-editor-search";
 import { formatWithCursorInView, resolvePrettierConfig } from "@/lib/format";
-import { isTsWorkerPath, tsClient } from "@/lib/ts-worker/client";
 import {
   tsCompletionSource,
   tsLinterExtension,
@@ -22,7 +21,21 @@ import {
 } from "@/lib/ts-worker/cm";
 import { scriptKindForPath } from "@/lib/ts-worker/mapping";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
+import { clientForPath } from "@/lib/intelligence";
 import { FindWidget } from "./find-widget";
+
+// Constrain tooltip positioning (lint messages, TS hover, autocomplete) to the
+// editor's own box instead of the whole browser window (CodeMirror's default).
+// The lint package always requests its diagnostic tooltip `above` the line. With
+// the window as the reference, the positioner sees room above a diagnostic on
+// the first visible lines — all the way to the window top — so it renders the
+// tooltip up there, behind the tab bar / header chrome sitting above the editor,
+// and it gets clipped (the reported bug). Bounding the space to the editor rect
+// raises the "top" to the editor's own top edge, so the positioner flips the
+// tooltip *below* the line when there's no room above — matching the TS hover.
+const editorTooltipSpace = tooltips({
+  tooltipSpace: (view) => view.dom.getBoundingClientRect(),
+});
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
 // transparent so it blends with the app background.
@@ -65,10 +78,12 @@ interface CodeEditorProps {
     fn: (path: string, config: object) => Promise<string | null>,
   ) => void;
   /**
-   * Cmd/Ctrl+Click go-to-definition. Called with the resolved TS definition
-   * target so the app can open the file and reveal the location. Only wired when
-   * the TS worker is enabled (see `typescript` gate). If omitted, Cmd+Click is
-   * a no-op and normal text interaction is preserved.
+   * Cmd/Ctrl+Click go-to-definition. Called with the resolved definition target
+   * so the app can open the file and reveal the location. Only wired when
+   * Language Intelligence is enabled (see `languageIntelligence` gate); the
+   * routed client resolves per-language, so this works for every supported
+   * language. If omitted, Cmd+Click is a no-op and normal text interaction is
+   * preserved.
    */
   onGoToDefinition?: (target: DefinitionResult) => void;
   /**
@@ -103,7 +118,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, languageIntelligence } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -138,19 +153,24 @@ export function CodeEditor({
   lintingRef.current = linting;
   const lintCompartment = useRef(new Compartment());
 
-  const typescriptRef = useRef(typescript);
-  typescriptRef.current = typescript;
+  const languageIntelligenceRef = useRef(languageIntelligence);
+  languageIntelligenceRef.current = languageIntelligence;
+
+  // Stable getter so extension closures resolve the routed intelligence client
+  // lazily (returns null when the active path's language has no LSP server).
+  const getClient = useRef(() => clientForPath(pathRef.current));
 
   const onGoToDefinitionRef = useRef(onGoToDefinition);
   onGoToDefinitionRef.current = onGoToDefinition;
   const onRevealConsumedRef = useRef(onRevealConsumed);
   onRevealConsumedRef.current = onRevealConsumed;
 
-  // TS completion source — built once; self-gates on isTsWorkerPath + ready().
+  // TS completion source — built once; self-gates on getClient() returning a
+  // non-null, ready() client (null when the active path has no LSP server).
   // The lint/hover extensions are built fresh per lint-compartment build (see
   // buildLintExtensions) so a reconfigure installs a new linter() that re-runs.
   const tsExtensions = useRef({
-    source: tsCompletionSource(() => pathRef.current),
+    source: tsCompletionSource(() => pathRef.current, getClient.current),
   });
 
   /** Returns "ts" for .ts/.tsx/.mts/.cts, "js" for everything else with a TS worker path. */
@@ -162,7 +182,7 @@ export function CodeEditor({
   // Single source of truth for the lint compartment's contents. Both makeState
   // and the live-reconfigure paths (settings effect, onTypesUpdated) build
   // identical config through here so a compartment reconfigure never diverges
-  // from the initial state. `linting`/`typescript` are passed explicitly so
+  // from the initial state. `linting`/`languageIntelligence` are passed explicitly so
   // effects can hand in the reactive values while makeState hands in the refs.
   const buildLintExtensions = useRef(
     (docPath: string, lintingEnabled: boolean, tsEnabled: boolean) =>
@@ -175,8 +195,8 @@ export function CodeEditor({
               // compartment with a brand-new linter() forces CodeMirror to tear
               // down the idle lint plugin and run a fresh lint. Reusing the same
               // instances would not — see lint-refresh.test.ts.
-              linter: tsLinterExtension(() => pathRef.current),
-              hover: tsHoverExtension(() => pathRef.current),
+              linter: tsLinterExtension(() => pathRef.current, getClient.current),
+              hover: tsHoverExtension(() => pathRef.current, getClient.current),
               kind: tsKindForPath(docPath),
             }
           : undefined,
@@ -228,6 +248,7 @@ export function CodeEditor({
         search({ top: true }),
         searchMatchTheme,
         tooltipTheme,
+        editorTooltipSpace,
         keymap.of([
           {
             key: "Mod-s",
@@ -274,20 +295,19 @@ export function CodeEditor({
         completionCompartment.current.of(
           completionExtensions(
             autocompleteRef.current,
-            typescriptRef.current ? { source: tsExtensions.current.source } : undefined,
+            languageIntelligenceRef.current ? { source: tsExtensions.current.source } : undefined,
           ),
         ),
         lintCompartment.current.of(
-          buildLintExtensions.current(docPath, lintingRef.current, typescriptRef.current),
+          buildLintExtensions.current(docPath, lintingRef.current, languageIntelligenceRef.current),
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const docString = update.state.doc.toString();
             onChangeRef.current(pathRef.current, docString);
-            // Notify the TS worker of the doc change so completions/diagnostics stay fresh.
-            if (isTsWorkerPath(pathRef.current)) {
-              tsClient().notifyDocChanged(pathRef.current, docString);
-            }
+            // Notify the routed intelligence client (if any) of the doc change
+            // so completions/diagnostics stay fresh.
+            getClient.current()?.notifyDocChanged(pathRef.current, docString);
             // Keep match count fresh when the document changes.
             searchHandlersRef.current.onEditorUpdate();
           }
@@ -301,22 +321,25 @@ export function CodeEditor({
             }
           }
         }),
-        // Cmd/Ctrl+Click go-to-definition. Gated on the TS worker being on
-        // (typescriptRef) and the active file being a TS-worker path; otherwise we
-        // leave the event alone so normal click/selection behaves as usual. When we
-        // do handle it we preventDefault so the browser doesn't also place the caret
-        // / start a text selection at the click point.
+        // Cmd/Ctrl+Click go-to-definition. Gated on Language Intelligence being
+        // on (languageIntelligenceRef); the routed intelligence client
+        // (getClient) resolves to null for languages without a server, so this
+        // works for every supported language. Otherwise we leave the event alone
+        // so normal click/selection behaves as usual. When we do handle it we
+        // preventDefault so the browser doesn't also place the caret / start a
+        // text selection at the click point.
         EditorView.domEventHandlers({
           mousedown: (event, view) => {
             if (!(event.metaKey || event.ctrlKey)) return false;
             const goto = onGoToDefinitionRef.current;
-            if (!goto || !typescriptRef.current) return false;
+            if (!goto || !languageIntelligenceRef.current) return false;
             const p = pathRef.current;
-            if (!isTsWorkerPath(p) || !tsClient().ready()) return false;
+            const client = getClient.current();
+            if (!client || !client.ready()) return false;
             const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
             if (offset == null) return false;
             event.preventDefault();
-            void tsClient()
+            void client
               .getDefinition(p, offset)
               .then((target) => {
                 if (target) goto(target);
@@ -326,12 +349,13 @@ export function CodeEditor({
         }),
         // Cmd/Ctrl-hover affordance: underlines the hovered identifier + shows a
         // pointer while the modifier is held, so Cmd+Click go-to-def is
-        // discoverable. Self-gates on typescript + isTsWorkerPath; purely visual,
-        // never preventDefaults, so it never interferes with the mousedown
-        // handler above or normal selection.
+        // discoverable. Self-gates on Language Intelligence + hasLspServer(path)
+        // (see cm.ts), so the underline cue shows for any language with a server;
+        // purely visual, never preventDefaults, so it never interferes with the
+        // mousedown handler above or normal selection.
         tsGoToDefHoverAffordance(
           () => pathRef.current,
-          () => typescriptRef.current,
+          () => languageIntelligenceRef.current,
         ),
       ],
     });
@@ -346,9 +370,19 @@ export function CodeEditor({
     });
     viewRef.current = view;
     view.focus();
+    // Tell the routed intelligence client (if any) this document is now open.
+    // Notify UNCONDITIONALLY — even before the server is ready. The client
+    // buffers didOpen and replays it once `initialize` resolves, so features
+    // (diagnostics/hover/completion) light up on first open. Gating this on
+    // ready() dropped the first file's didOpen, so nothing worked until a tab
+    // switch re-opened the doc against the now-ready server.
+    getClient.current()?.notifyDocOpened(pathRef.current, content);
     return () => {
       view.destroy();
       viewRef.current = null;
+      // Best-effort: tell the engine the document is no longer visible.
+      // (Worker's notifyDocClosed is a no-op today; LSP tolerates open docs.)
+      getClient.current()?.notifyDocClosed(pathRef.current);
     };
     // The initial doc is only read once, on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -373,10 +407,18 @@ export function CodeEditor({
     const view = viewRef.current;
     if (!view || pathRef.current === path) return;
     statesRef.current.set(pathRef.current, view.state);
+    // The previous path is no longer the visible document — best-effort
+    // didClose (worker: no-op; LSP: tolerant of docs left open, but this
+    // keeps the signal accurate for engines that care). Routed by the OLD
+    // path, since getClient reads pathRef.current.
+    getClient.current()?.notifyDocClosed(pathRef.current);
     pathRef.current = path;
     const cached = statesRef.current.get(path);
     view.setState(cached ?? makeStateRef.current(path, content));
     view.focus();
+    // Routed by the NEW path (pathRef.current was just updated above).
+    // Unconditional (client buffers until ready — see the mount effect).
+    getClient.current()?.notifyDocOpened(path, content);
   }, [path, content]);
 
   // Keep the theme in sync (also re-applied after state swaps, which may
@@ -426,7 +468,7 @@ export function CodeEditor({
 
   // Apply autocomplete live; path dep ensures JSON-specific linter is correct
   // after tab swaps (lint compartment depends on languageKey for JSON linter).
-  // typescript dep ensures TS sources are added/removed when the toggle changes.
+  // languageIntelligence dep ensures TS sources are added/removed when the toggle changes.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
@@ -434,23 +476,23 @@ export function CodeEditor({
       effects: completionCompartment.current.reconfigure(
         completionExtensions(
           autocomplete,
-          typescript ? { source: tsExtensions.current.source } : undefined,
+          languageIntelligence ? { source: tsExtensions.current.source } : undefined,
         ),
       ),
     });
-  }, [autocomplete, typescript, path]);
+  }, [autocomplete, languageIntelligence, path]);
 
   // Apply linting live; path dep recomputes languageKey so JSON docs get the
-  // JSON linter after tab swaps. typescript dep gates TS diagnostic sources.
+  // JSON linter after tab swaps. languageIntelligence dep gates TS diagnostic sources.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: lintCompartment.current.reconfigure(
-        buildLintExtensions.current(path, linting, typescript),
+        buildLintExtensions.current(path, linting, languageIntelligence),
       ),
     });
-  }, [linting, typescript, path]);
+  }, [linting, languageIntelligence, path]);
 
   // When the TS worker loads new types (e.g., node_modules/@types), re-run the
   // linter so diagnostics reflect the updated type info.
@@ -467,10 +509,15 @@ export function CodeEditor({
   //
   // Warm-up fires many `typesUpdated` events (one per resolution round); debounce
   // so the burst collapses into ONE reconfigure after types settle.
+  //
+  // Re-subscribed on every `path` change so the listener follows the ACTIVE
+  // document's client: switching e.g. a.ts → b.py routes to a different language
+  // server, and its pushed diagnostics must trigger this re-lint. A mount-only
+  // (`[]`) subscription stayed bound to the first file's client, so a later
+  // file's diagnostics never refreshed until an unrelated re-lint.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const unsub = tsClient().onTypesUpdated(() => {
-      if (!isTsWorkerPath(pathRef.current)) return;
+    const unsub = getClient.current()?.onTypesUpdated(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
@@ -481,7 +528,7 @@ export function CodeEditor({
             buildLintExtensions.current(
               pathRef.current,
               lintingRef.current,
-              typescriptRef.current,
+              languageIntelligenceRef.current,
             ),
           ),
         });
@@ -489,9 +536,9 @@ export function CodeEditor({
     });
     return () => {
       if (timer) clearTimeout(timer);
-      unsub();
+      unsub?.();
     };
-  }, []);
+  }, [path]);
 
   // Go-to-definition reveal: when App sets `revealTarget` for the ACTIVE path
   // (after openFile), scroll to and select the start of the target line ONCE,

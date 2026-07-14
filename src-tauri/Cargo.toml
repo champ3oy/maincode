@@ -30,6 +30,10 @@ portable-pty = "0.9"
 # base64 is already in the lockfile transitively (v0.22.1); declaring it here
 # adds no new package — it just makes the crate directly nameable.
 base64 = "0.22"
+# Language-server acquisition: download + extract archives on first use.
+ureq = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
 
 # macOS-only native interop for the Dock-menu "New Window" item. These crates
 # are already in the tree (pulled in transitively by tauri/tao); listing them

@@ -9,9 +9,9 @@ import {
   type Extension,
 } from "@codemirror/view";
 import { StateEffect, StateField } from "@codemirror/state";
-import { isTsWorkerPath, tsClient } from "./client";
 import type { CompletionItemData } from "./protocol";
 import { renderHover } from "./hover-render";
+import { hasLspServer, type IntelligenceClient } from "@/lib/intelligence";
 
 const KIND_MAP: Record<string, string> = {
   var: "variable", let: "variable", const: "variable", "local var": "variable",
@@ -22,7 +22,12 @@ const KIND_MAP: Record<string, string> = {
   type: "type", "type parameter": "type", parameter: "variable",
 };
 
-function toCompletion(item: CompletionItemData, path: string, offset: number): Completion {
+function toCompletion(
+  item: CompletionItemData,
+  path: string,
+  offset: number,
+  getClient: () => IntelligenceClient | null,
+): Completion {
   const c: Completion = {
     label: item.label,
     type: KIND_MAP[item.kind] ?? "text",
@@ -41,8 +46,8 @@ function toCompletion(item: CompletionItemData, path: string, offset: number): C
       // docAfterLabel identity check drops the edits if ANY change landed since,
       // and mapPos re-bases them through the label insertion. Do not "fix" this
       // into a stale-doc query.
-      void tsClient()
-        .getCompletionDetails(path, offset, item)
+      void getClient()
+        ?.getCompletionDetails(path, offset, item)
         .then((details) => {
           if (!details || details.extraChanges.length === 0) return;
           // If the user typed between accepting the completion and the worker
@@ -65,32 +70,40 @@ function toCompletion(item: CompletionItemData, path: string, offset: number): C
   return c;
 }
 
-export function tsCompletionSource(getPath: () => string): CompletionSource {
+export function tsCompletionSource(
+  getPath: () => string,
+  getClient: () => IntelligenceClient | null,
+): CompletionSource {
   return async (ctx) => {
     const path = getPath();
-    if (!isTsWorkerPath(path) || !tsClient().ready()) return null;
+    const client = getClient();
+    if (!client || !client.ready()) return null;
     // require a word char or explicit trigger, mirroring completeAnyWord etiquette
     const word = ctx.matchBefore(/[\w$.]+$/);
     if (!word && !ctx.explicit) return null;
-    const res = await tsClient().getCompletions(path, ctx.pos);
+    const res = await client.getCompletions(path, ctx.pos);
     if (!res || res.items.length === 0) return null;
     const from = word && !word.text.endsWith(".") ? word.from + (word.text.lastIndexOf(".") + 1) : ctx.pos;
     const result: CompletionResult = {
       from: Math.min(from, ctx.pos),
-      options: res.items.map((i) => toCompletion(i, path, ctx.pos)),
+      options: res.items.map((i) => toCompletion(i, path, ctx.pos, getClient)),
       validFor: /^[\w$]*$/,
     };
     return result;
   };
 }
 
-export function tsLinterExtension(getPath: () => string): Extension {
+export function tsLinterExtension(
+  getPath: () => string,
+  getClient: () => IntelligenceClient | null,
+): Extension {
   return linter(
     async (view) => {
+      const client = getClient();
       const path = getPath();
-      if (!isTsWorkerPath(path) || !tsClient().ready()) return [];
+      if (!client || !client.ready()) return [];
       const docLen = view.state.doc.length;
-      const diags = await tsClient().getDiagnostics(path);
+      const diags = await client.getDiagnostics(path);
       return diags
         .filter((d) => d.from <= docLen)
         .map((d): Diagnostic => ({ from: d.from, to: Math.min(d.to, docLen), severity: d.severity, message: d.message }));
@@ -101,15 +114,17 @@ export function tsLinterExtension(getPath: () => string): Extension {
 
 /**
  * VS Code-style Cmd/Ctrl-hover affordance for go-to-definition. While the user
- * holds Cmd (metaKey; Ctrl on non-mac) and hovers an identifier in a TS/JS file,
- * the hovered word is underlined and the cursor becomes a pointer — signalling
- * it's clickable (the existing Cmd+Click mousedown handler does the navigation).
+ * holds Cmd (metaKey; Ctrl on non-mac) and hovers an identifier in a file whose
+ * language has a server, the hovered word is underlined and the cursor becomes a
+ * pointer — signalling it's clickable (the existing Cmd+Click mousedown handler
+ * does the navigation).
  *
- * Self-gates on the caller's `enabled()` (settings.editor.typescript) plus
- * `isTsWorkerPath(path)`. It only ever adds a passive mark decoration + cursor
- * style; it never calls preventDefault or dispatches selection changes, so it
- * cannot interfere with Cmd+Click go-to-def or with normal text selection when
- * Cmd isn't held.
+ * Self-gates on the caller's `enabled()` (settings.editor.languageIntelligence)
+ * plus `hasLspServer(path)`, so the cue shows for every supported language
+ * (TypeScript, Python, Rust, Go, C/C++), not just TS/JS. It only ever adds a
+ * passive mark decoration + cursor style; it never calls preventDefault or
+ * dispatches selection changes, so it cannot interfere with Cmd+Click go-to-def
+ * or with normal text selection when Cmd isn't held.
  */
 const cmdHoverMark = Decoration.mark({
   class: "cm-cmd-hover-link",
@@ -148,7 +163,7 @@ export function tsGoToDefHoverAffordance(
   getPath: () => string,
   enabled: () => boolean,
 ): Extension {
-  const active = (): boolean => enabled() && isTsWorkerPath(getPath());
+  const active = (): boolean => enabled() && hasLspServer(getPath());
 
   const plugin = ViewPlugin.fromClass(
     class {
@@ -223,11 +238,15 @@ export function tsGoToDefHoverAffordance(
   return [cmdHoverField, plugin, cmdHoverTheme];
 }
 
-export function tsHoverExtension(getPath: () => string): Extension {
+export function tsHoverExtension(
+  getPath: () => string,
+  getClient: () => IntelligenceClient | null,
+): Extension {
   return hoverTooltip(async (view, pos) => {
     const path = getPath();
-    if (!isTsWorkerPath(path) || !tsClient().ready()) return null;
-    const info = await tsClient().getHover(path, pos);
+    const client = getClient();
+    if (!client || !client.ready()) return null;
+    const info = await client.getHover(path, pos);
     if (!info) return null;
     return {
       pos,

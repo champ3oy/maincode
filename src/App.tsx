@@ -57,7 +57,8 @@ import {
   type PaletteCommand,
 } from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
-import { tsClient } from "@/lib/ts-worker/client";
+import { setProjectRoot, warmServer } from "@/lib/intelligence";
+import { invoke } from "@tauri-apps/api/core";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 
 function App() {
@@ -90,14 +91,28 @@ function App() {
     setFormatRoot(rootPath);
   }, [rootPath, setFormatRoot]);
 
-  // Open/close the TypeScript project with the workspace (worker is lazy).
+  // Set (or clear) the project root on the client manager so per-language LSP
+  // clients are lazily created/opened as files route to them. When the project
+  // has Rust, pre-warm rust-analyzer so its slow first index runs in the
+  // background before the user opens a .rs file (its progress shows in the
+  // status bar).
   useEffect(() => {
-    if (rootPath && settings.editor.typescript) {
-      void tsClient().openProject(rootPath).catch(() => {});
-    } else {
-      tsClient().closeProject();
-    }
-  }, [rootPath, settings.editor.typescript]);
+    const root = rootPath && settings.editor.languageIntelligence ? rootPath : null;
+    setProjectRoot(root);
+    if (!root) return;
+    // Stale-guard: if the project switches while has_cargo_project is in
+    // flight, the old continuation must not warm rust-analyzer against the
+    // new (possibly non-cargo) root.
+    let stale = false;
+    void invoke<boolean>("has_cargo_project", { root })
+      .then((yes) => {
+        if (yes && !stale) warmServer("rust");
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [rootPath, settings.editor.languageIntelligence]);
 
   function clampFontSize(size: number): number {
     return Math.min(32, Math.max(8, Math.round(size)));
@@ -862,7 +877,7 @@ function App() {
                     onCursor={(line, col) => setCursor({ line, col })}
                     formatRoot={rootPath}
                     onGoToDefinition={
-                      settings.editor.typescript
+                      settings.editor.languageIntelligence
                         ? handleGoToDefinition
                         : undefined
                     }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_SETTINGS: &str = r#"{
   "theme": "system",
-  "editor": { "fontSize": 13, "fontFamily": "app-mono", "tabSize": 2, "wordWrap": false, "autocomplete": true, "linting": true, "formatOnSave": false, "typescript": true },
+  "editor": { "fontSize": 13, "fontFamily": "app-mono", "tabSize": 2, "wordWrap": false, "autocomplete": true, "linting": true, "formatOnSave": false, "languageIntelligence": true },
   "terminal": { "fontSize": 12 },
   "diff": { "fontSize": 13, "fontFamily": "app-mono", "wordWrap": false }
 }"#;

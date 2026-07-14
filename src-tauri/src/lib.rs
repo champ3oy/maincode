@@ -3,6 +3,8 @@ mod menu;
 mod watcher;
 mod fs_ops;
 mod pty;
+mod lsp;
+mod server_acquire;
 mod settings;
 #[cfg(target_os = "macos")]
 mod dock_menu;
@@ -64,10 +66,14 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 let label = window.label().to_string();
                 window.state::<AppState>().remove_window(&label);
+                // Stop any LSP servers this window owned — the JS dispose() may
+                // not run before the webview is torn down, which would leak them.
+                lsp::stop_window(&label, window.state::<lsp::LspState>());
             }
         })
         .manage(AppState::default())
         .manage(pty::PtyState::default())
+        .manage(lsp::LspState::default())
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
             git::get_repo_status,
@@ -96,6 +102,14 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            lsp::lsp_spawn,
+            lsp::lsp_send,
+            lsp::lsp_stop,
+            lsp::lsp_ensure_server,
+            lsp::lsp_server_status,
+            lsp::lsp_remove_server,
+            lsp::has_cargo_project,
+            lsp::lsp_init_options,
             settings::read_settings,
             settings::write_settings,
             settings::settings_path,
