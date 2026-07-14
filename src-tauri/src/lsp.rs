@@ -87,6 +87,13 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
             Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
         }
         "rust" => {
+            // Prefer the toolchain-matched rust-analyzer (rustup component): it
+            // always matches the user's cargo, so `cargo metadata` succeeds and
+            // the workspace loads. A stale standalone binary breaks against a
+            // newer cargo. Fall back to the downloaded binary for non-rustup setups.
+            if let Some(p) = rustup_which("rust-analyzer") {
+                return Ok((p, vec![]));
+            }
             let bin = cache_dir()?.join("rust").join("rust-analyzer");
             Ok((bin, vec![]))
         }
@@ -156,6 +163,37 @@ fn cache_dir() -> Result<std::path::PathBuf, String> {
     Ok(std::path::PathBuf::from(home).join(".config").join("maincode").join("servers"))
 }
 
+/// Path to a rustup-managed binary for the active toolchain, if rustup and the
+/// component are both present. Uses the login-shell PATH so rustup is found even
+/// when the app was launched from Finder. Returns None if rustup or the
+/// component is absent (caller then falls back to a downloaded binary).
+fn rustup_which(bin: &str) -> Option<std::path::PathBuf> {
+    let mut cmd = std::process::Command::new("rustup");
+    cmd.args(["which", bin]);
+    if let Some(path) = login_path() {
+        cmd.env("PATH", path);
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let p = std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    if p.exists() { Some(p) } else { None }
+}
+
+/// Install a rustup component for the active toolchain (idempotent). Returns
+/// true on success. Used to obtain a rust-analyzer that always matches the
+/// user's cargo, avoiding version-skew where a stale standalone binary passes
+/// `cargo metadata` flags a newer cargo rejects (→ "failed to load workspace").
+fn rustup_add(component: &str) -> bool {
+    let mut cmd = std::process::Command::new("rustup");
+    cmd.args(["component", "add", component]);
+    if let Some(path) = login_path() {
+        cmd.env("PATH", path);
+    }
+    cmd.status().map(|s| s.success()).unwrap_or(false)
+}
+
 /// Download-and-cache a single-binary server distributed as a gzipped release
 /// asset on GitHub. Returns early if the binary is already cached. Emits
 /// `lsp-install-<server_id>` progress events for download/extract/done.
@@ -216,15 +254,24 @@ fn ensure_server_blocking(server_id: &str, app: &AppHandle) -> Result<(), String
     match server_id {
         // Bundled (node-based): nothing to acquire.
         "typescript" | "python" | "bash" | "yaml" | "json" | "html" | "css" | "dockerfile" | "svelte" | "graphql" | "vue" => Ok(()),
-        "rust" => ensure_github_gz(
-            app,
-            "rust",
-            "rust-analyzer",
-            &format!(
-                "https://github.com/rust-lang/rust-analyzer/releases/download/2025-06-30/rust-analyzer-{}-apple-darwin.gz",
-                std::env::consts::ARCH // "aarch64" | "x86_64"
-            ),
-        ),
+        "rust" => {
+            // Prefer the rustup toolchain rust-analyzer (version-matched to the
+            // user's cargo). Fall back to a current standalone release only when
+            // rustup is unavailable. Pin kept recent so the fallback also works
+            // against a modern cargo's `cargo metadata`.
+            if rustup_which("rust-analyzer").is_some() || rustup_add("rust-analyzer") {
+                return Ok(());
+            }
+            ensure_github_gz(
+                app,
+                "rust",
+                "rust-analyzer",
+                &format!(
+                    "https://github.com/rust-lang/rust-analyzer/releases/download/2026-07-13/rust-analyzer-{}-apple-darwin.gz",
+                    std::env::consts::ARCH // "aarch64" | "x86_64"
+                ),
+            )
+        }
         "cpp" => {
             let dir = cache_dir()?.join("cpp");
             // resolve_command("cpp") returns exactly this path; it must exist
