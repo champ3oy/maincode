@@ -173,6 +173,26 @@ fn cache_dir() -> Result<std::path::PathBuf, String> {
     Ok(std::path::PathBuf::from(home).join(".config").join("maincode").join("servers"))
 }
 
+/// Whether `root` (or an immediate subdirectory) contains a `Cargo.toml`. Used to
+/// pre-warm rust-analyzer on project open so its slow first index starts early.
+/// One level deep covers the common cases: a Rust repo (root), a Tauri app
+/// (`src-tauri/Cargo.toml`), and typical monorepo layouts — without a deep scan.
+#[tauri::command]
+pub fn has_cargo_project(root: String) -> bool {
+    let root = std::path::PathBuf::from(&root);
+    if root.join("Cargo.toml").is_file() {
+        return true;
+    }
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for e in entries.flatten() {
+            if e.path().join("Cargo.toml").is_file() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Path to a rustup-managed binary for the active toolchain, if rustup and the
 /// component are both present. Uses the login-shell PATH so rustup is found even
 /// when the app was launched from Finder. Returns None if rustup or the

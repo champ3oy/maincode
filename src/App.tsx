@@ -57,7 +57,8 @@ import {
   type PaletteCommand,
 } from "@/components/command-center/command-center";
 import { TerminalDock } from "@/components/terminal/terminal-dock";
-import { setProjectRoot } from "@/lib/intelligence";
+import { setProjectRoot, warmServer } from "@/lib/intelligence";
+import { invoke } from "@tauri-apps/api/core";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 
 function App() {
@@ -91,9 +92,19 @@ function App() {
   }, [rootPath, setFormatRoot]);
 
   // Set (or clear) the project root on the client manager so per-language LSP
-  // clients are lazily created/opened as files route to them.
+  // clients are lazily created/opened as files route to them. When the project
+  // has Rust, pre-warm rust-analyzer so its slow first index runs in the
+  // background before the user opens a .rs file (its progress shows in the
+  // status bar).
   useEffect(() => {
-    setProjectRoot(rootPath && settings.editor.languageIntelligence ? rootPath : null);
+    const root = rootPath && settings.editor.languageIntelligence ? rootPath : null;
+    setProjectRoot(root);
+    if (!root) return;
+    void invoke<boolean>("has_cargo_project", { root })
+      .then((yes) => {
+        if (yes) warmServer("rust");
+      })
+      .catch(() => {});
   }, [rootPath, settings.editor.languageIntelligence]);
 
   function clampFontSize(size: number): number {

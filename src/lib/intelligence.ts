@@ -7,6 +7,16 @@ import type {
   HoverResult,
 } from "./ts-worker/protocol";
 
+/** Work-done progress reported by a language server (indexing, building, …). */
+export interface LspProgress {
+  title: string;
+  message?: string;
+  percentage?: number;
+}
+
+/** Manager-level progress event: which server is reporting, plus its progress. */
+export type LspProgressEvent = LspProgress & { serverId: string };
+
 /** The contract the LSP client implements and the CodeMirror layer consumes.
  *  Offsets are UTF-16 doc offsets. */
 export interface IntelligenceClient {
@@ -30,8 +40,10 @@ export interface IntelligenceClient {
   getDefinition(path: string, offset: number): Promise<DefinitionResult | null>;
   /** Fires when pushed diagnostics arrive so the editor re-lints. */
   onTypesUpdated(fn: () => void): () => void;
+  /** Subscribe to work-done progress (indexing/building); null when idle. */
+  onProgress?(fn: (p: LspProgress | null) => void): () => void;
 }
 
 /** Per-language client manager: routes a file path to its language server's
  *  lazily-created client (or null when the language has no server). */
-export { setProjectRoot, clientForPath, hasLspServer } from "./lsp/manager";
+export { setProjectRoot, clientForPath, hasLspServer, warmServer, onLspProgress } from "./lsp/manager";

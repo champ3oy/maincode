@@ -6,7 +6,7 @@ import type {
   DefinitionResult,
   HoverResult,
 } from "../ts-worker/protocol";
-import type { IntelligenceClient } from "../intelligence";
+import type { IntelligenceClient, LspProgress } from "../intelligence";
 import { invoke } from "@tauri-apps/api/core";
 import { spawnServer, type Transport } from "./transport";
 import {
@@ -37,6 +37,10 @@ export class LspClient implements IntelligenceClient {
   private readonly openedOnServer = new Set<string>(); // paths for which didOpen has been sent
   private readonly diagnostics = new Map<string, LspDiagnostic[]>(); // uri -> diags
   private readonly typesListeners = new Set<() => void>();
+  // Work-done progress, keyed by token. rust-analyzer runs several concurrently
+  // (Fetching, Indexing, Building…); we surface the most-recently-updated one.
+  private readonly progressTokens = new Map<string | number, LspProgress>();
+  private readonly progressListeners = new Set<(p: LspProgress | null) => void>();
   private isReady = false;
 
   constructor(
@@ -64,6 +68,9 @@ export class LspClient implements IntelligenceClient {
           definition: {},
           publishDiagnostics: {},
         },
+        // Opt into server-initiated progress so rust-analyzer (and others) report
+        // indexing/build progress via `window/workDoneProgress/create` + `$/progress`.
+        window: { workDoneProgress: true },
       },
       workspaceFolders: [{ uri: pathToUri(root), name: root }],
       initializationOptions: initOptions ?? undefined,
@@ -80,6 +87,8 @@ export class LspClient implements IntelligenceClient {
     this.docs.clear();
     this.openedOnServer.clear();
     this.diagnostics.clear();
+    this.progressTokens.clear();
+    this.progressListeners.forEach((fn) => fn(null));
     this.transport?.dispose();
     this.transport = null;
   }
@@ -203,6 +212,37 @@ export class LspClient implements IntelligenceClient {
     return () => this.typesListeners.delete(fn);
   }
 
+  /** Subscribe to work-done progress (indexing/building). Fires with the current
+   *  progress, or null when nothing is in flight. */
+  onProgress(fn: (p: LspProgress | null) => void): () => void {
+    this.progressListeners.add(fn);
+    return () => this.progressListeners.delete(fn);
+  }
+
+  private onProgressMessage(token: string | number | undefined, value: any): void {
+    if (token === undefined || !value) return;
+    if (value.kind === "end") {
+      this.progressTokens.delete(token);
+    } else {
+      // Re-insert so the most-recently-updated token sorts last (shown by emitProgress).
+      const prev = this.progressTokens.get(token);
+      const isReport = value.kind === "report";
+      this.progressTokens.delete(token);
+      this.progressTokens.set(token, {
+        title: value.title ?? prev?.title ?? "",
+        message: value.message ?? (isReport ? prev?.message : undefined),
+        percentage: value.percentage ?? (isReport ? prev?.percentage : undefined),
+      });
+    }
+    this.emitProgress();
+  }
+
+  private emitProgress(): void {
+    const vals = [...this.progressTokens.values()];
+    const current = vals.length ? vals[vals.length - 1] : null;
+    this.progressListeners.forEach((fn) => fn(current));
+  }
+
   // ---- JSON-RPC plumbing ----
   private request(method: string, params: unknown): Promise<unknown> {
     const id = this.nextId++;
@@ -239,6 +279,10 @@ export class LspClient implements IntelligenceClient {
       this.diagnostics.set(msg.params.uri, msg.params.diagnostics ?? []);
       this.typesListeners.forEach((fn) => fn());
     }
+    if (msg.method === "$/progress") {
+      this.onProgressMessage(msg.params?.token, msg.params?.value);
+      return;
+    }
     // Server→client requests (e.g. registerCapability) get a null result so the
     // server isn't left waiting.
     if (msg.id !== undefined && msg.method) {
@@ -247,11 +291,23 @@ export class LspClient implements IntelligenceClient {
   }
 }
 
+// LSP languageId for a path. Servers key document handling off this, so it must
+// match the actual language — not a blanket "typescript" (the prior bug, which
+// only happened to work because rust-analyzer/pyright ignore it).
+const LANGUAGE_ID: Record<string, string> = {
+  ts: "typescript", tsx: "typescriptreact",
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascriptreact",
+  py: "python", rs: "rust", go: "go",
+  c: "c", h: "c", cc: "cpp", cpp: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
+  json: "json", jsonc: "jsonc", html: "html", htm: "html", css: "css",
+  yaml: "yaml", yml: "yaml", sh: "shellscript", bash: "shellscript",
+  vue: "vue", svelte: "svelte", graphql: "graphql", gql: "graphql",
+};
 function languageId(path: string): string {
-  if (path.endsWith(".tsx")) return "typescriptreact";
-  if (path.endsWith(".jsx")) return "javascriptreact";
-  if (path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".cjs")) return "javascript";
-  return "typescript";
+  const lower = path.toLowerCase();
+  if (/(^|\/)dockerfile$/.test(lower) || lower.endsWith(".dockerfile")) return "dockerfile";
+  const ext = lower.slice(lower.lastIndexOf(".") + 1);
+  return LANGUAGE_ID[ext] ?? "plaintext";
 }
 
 function hoverToMarkdown(contents: LspHover["contents"]): string {

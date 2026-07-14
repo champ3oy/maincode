@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useRecentRepos } from "@/hooks/use-recent-repos";
+import { LspProgressSegment } from "./lsp-progress-segment";
 import {
   checkoutBranch,
   listBranches,
@@ -73,6 +74,7 @@ export function StatusBar({
       </div>
 
       <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+        <LspProgressSegment />
         {cursor && <span>Ln {cursor.line}, Col {cursor.col}</span>}
         {languageLabel && <span>{languageLabel}</span>}
         {(dirtyCount ?? 0) > 0 && <span>{dirtyCount} unsaved</span>}
