@@ -92,6 +92,22 @@ fn login_path() -> Option<String> {
     if p.is_empty() { None } else { Some(p) }
 }
 
+fn cache_dir() -> Result<std::path::PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    Ok(std::path::PathBuf::from(home).join(".config").join("maincode").join("servers"))
+}
+
+/// Per-server acquisition. Bundled servers are no-ops; download/go-install
+/// servers are added in later tasks. Emits `lsp-install-<id>` progress events.
+#[tauri::command]
+pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String> {
+    match server_id.as_str() {
+        // Bundled (node-based): nothing to acquire.
+        "typescript" | "python" => Ok(()),
+        _ => Err(format!("no acquire strategy for {server_id}")),
+    }
+}
+
 #[tauri::command]
 pub fn lsp_spawn(
     server_id: String,

@@ -14,6 +14,7 @@ export async function spawnServer(
   serverId: string,
   root: string,
 ): Promise<{ id: number; transport: Transport }> {
+  await invoke("lsp_ensure_server", { serverId }); // downloads/builds if needed
   const id = await invoke<number>("lsp_spawn", { serverId, root });
   const msgListeners = new Set<(m: string) => void>();
   const exitListeners = new Set<() => void>();
