@@ -26,6 +26,16 @@ struct LspInner {
 pub struct LspState {
     inner: Mutex<LspInner>,
     next_id: AtomicU32,
+    // Per-server-id install lock. Each Tauri window is its own webview → its own
+    // manager singleton → an independent `lsp_ensure_server` call, so two
+    // first-time opens (or an open + the Settings "Install" button) for the same
+    // absent server would otherwise race: both see `bin.exists()==false` and both
+    // download/extract to the same paths, interleaving writes. This map hands out
+    // one `Arc<Mutex<()>>` per server id; `lsp_ensure_server` holds it across the
+    // download/extract so acquisition is serialized per server. The waiting caller
+    // then sees the binary already present (double-check) and returns early. Kept
+    // SEPARATE from `inner` so the blocking download never holds the sessions lock.
+    install_locks: Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>,
 }
 
 impl Default for LspState {
@@ -36,6 +46,7 @@ impl Default for LspState {
                 by_key: HashMap::new(),
             }),
             next_id: AtomicU32::new(1),
+            install_locks: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -129,9 +140,28 @@ fn ensure_github_gz(app: &AppHandle, server_id: &str, bin_name: &str, url: &str)
 }
 
 /// Per-server acquisition. Bundled servers are no-ops; download/go-install
-/// servers are added in later tasks. Emits `lsp-install-<id>` progress events.
+/// servers fetch+extract into the cache. Emits `lsp-install-<id>` progress
+/// events. Serialized per server id via `state.install_locks` so concurrent
+/// first-time opens from separate windows never interleave writes to the same
+/// files; the per-arm `if bin.exists() { return Ok(()) }` acts as the
+/// double-check once a waiter acquires the lock.
 #[tauri::command]
-pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String> {
+pub fn lsp_ensure_server(
+    server_id: String,
+    app: AppHandle,
+    state: State<LspState>,
+) -> Result<(), String> {
+    // Serialize acquisition per server id. Bundled (ts/python) arms return before
+    // any FS work so acquiring the lock for them is harmless. Held across the
+    // blocking download/extract — safe because this is a sync Tauri command on a
+    // worker thread, and this lock is separate from `state.inner` (the sessions
+    // mutex), so the download never blocks LSP message routing.
+    let lock = {
+        let mut m = state.install_locks.lock().map_err(|_| "lock poisoned")?;
+        m.entry(server_id.clone()).or_default().clone()
+    };
+    let _guard = lock.lock().map_err(|_| "install lock poisoned")?;
+
     match server_id.as_str() {
         // Bundled (node-based): nothing to acquire.
         "typescript" | "python" => Ok(()),
@@ -146,19 +176,38 @@ pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String
         ),
         "cpp" => {
             let dir = cache_dir()?.join("cpp");
+            // resolve_command("cpp") returns exactly this path; it must exist
+            // only after a fully successful extract + atomic rename below.
             let bin = dir.join("clangd_18.1.3").join("bin").join("clangd");
             if bin.exists() {
                 return Ok(());
             }
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            // Clear any stale `.partial` left by a prior crash (installs are
+            // serialized per id, so no live writer can own it).
+            let staging = dir.join(".partial");
+            let _ = std::fs::remove_dir_all(&staging);
             let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "download" }));
-            let tmp = dir.join("clangd.zip");
-            crate::server_acquire::download(
-                "https://github.com/clangd/clangd/releases/download/18.1.3/clangd-mac-18.1.3.zip",
-                &tmp,
-            )?;
-            let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "extract" }));
-            crate::server_acquire::extract_zip(&tmp, &dir)?;
-            let _ = std::fs::remove_file(&tmp);
+            let zip = dir.join("clangd.zip");
+            let acquire = (|| -> Result<(), String> {
+                crate::server_acquire::download(
+                    "https://github.com/clangd/clangd/releases/download/18.1.3/clangd-mac-18.1.3.zip",
+                    &zip,
+                )?;
+                let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "extract" }));
+                // Extract the nested tree into the staging dir, then atomically
+                // rename the extracted `clangd_18.1.3` root onto its final path.
+                // `dest_dir/clangd_18.1.3/bin/clangd` never exists partially.
+                crate::server_acquire::extract_zip(&zip, &staging)?;
+                let extracted = staging.join("clangd_18.1.3");
+                let final_root = dir.join("clangd_18.1.3");
+                let _ = std::fs::remove_dir_all(&final_root);
+                std::fs::rename(&extracted, &final_root).map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            let _ = std::fs::remove_file(&zip);
+            let _ = std::fs::remove_dir_all(&staging);
+            acquire?;
             let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "done" }));
             Ok(())
         }
@@ -218,7 +267,18 @@ pub fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
 
 #[tauri::command]
 pub fn lsp_remove_server(server_id: String) -> Result<(), String> {
-    let dir = cache_dir()?.join(&server_id);
+    // Only the known, Rust-authoritative server ids may be removed. This blocks
+    // absolute/`..` server_id values from escaping the cache dir (join() would
+    // otherwise resolve them to arbitrary paths).
+    if !matches!(server_id.as_str(), "typescript" | "python" | "rust" | "cpp" | "go") {
+        return Err(format!("unknown server id: {server_id}"));
+    }
+    let cache = cache_dir()?;
+    let dir = cache.join(&server_id);
+    // Defense in depth: the resolved dir must stay inside the cache root.
+    if !dir.starts_with(&cache) {
+        return Err("refusing to remove path outside cache".into());
+    }
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
