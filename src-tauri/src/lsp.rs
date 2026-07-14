@@ -83,6 +83,10 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
             let bin = cache_dir()?.join("cpp").join("clangd_18.1.3").join("bin").join("clangd");
             Ok((bin, vec![]))
         }
+        "go" => {
+            let bin = cache_dir()?.join("go").join("gopls");
+            Ok((bin, vec![]))
+        }
         _ => Err(format!("unknown language server: {server_id}")),
     }
 }
@@ -156,6 +160,26 @@ pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String
             crate::server_acquire::extract_zip(&tmp, &dir)?;
             let _ = std::fs::remove_file(&tmp);
             let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "done" }));
+            Ok(())
+        }
+        "go" => {
+            let dir = cache_dir()?.join("go");
+            let bin = dir.join("gopls");
+            if bin.exists() {
+                return Ok(());
+            }
+            let _ = app.emit("lsp-install-go", serde_json::json!({ "phase": "install" }));
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let mut cmd = std::process::Command::new("go");
+            cmd.args(["install", "golang.org/x/tools/gopls@v0.16.2"]).env("GOBIN", &dir);
+            if let Some(path) = login_path() {
+                cmd.env("PATH", path);
+            }
+            let status = cmd.status().map_err(|_| "Go toolchain not found — install Go to use gopls".to_string())?;
+            if !status.success() {
+                return Err("go install gopls failed".into());
+            }
+            let _ = app.emit("lsp-install-go", serde_json::json!({ "phase": "done" }));
             Ok(())
         }
         _ => Err(format!("no acquire strategy for {server_id}")),
