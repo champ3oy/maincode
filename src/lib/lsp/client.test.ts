@@ -163,4 +163,20 @@ describe("LspClient", () => {
     fake.push({ jsonrpc: "2.0", id: init.id, result: { capabilities: {} } });
     await opening;
   });
+
+  it("disposes the spawned transport when closed mid-openProject (no orphaned server)", async () => {
+    const fake = makeFake();
+    const dispose = vi.fn();
+    fake.transport.dispose = dispose;
+    let resolveSpawn!: (v: { id: number; transport: Transport }) => void;
+    const c = new LspClient("typescript", () => new Promise((r) => (resolveSpawn = r)));
+    const opening = c.openProject("/repo");
+    await new Promise((r) => setTimeout(r)); // openProject is now awaiting the spawn
+    c.closeProject(); // project switched while the server was still starting
+    resolveSpawn({ id: 1, transport: fake.transport });
+    await opening; // stale continuation must bail cleanly
+    expect(dispose).toHaveBeenCalled(); // the just-spawned server was stopped
+    expect(c.ready()).toBe(false);
+    expect(fake.sent.find((m) => m.method === "initialize")).toBeUndefined();
+  });
 });

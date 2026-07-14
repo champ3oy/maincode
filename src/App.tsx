@@ -100,11 +100,18 @@ function App() {
     const root = rootPath && settings.editor.languageIntelligence ? rootPath : null;
     setProjectRoot(root);
     if (!root) return;
+    // Stale-guard: if the project switches while has_cargo_project is in
+    // flight, the old continuation must not warm rust-analyzer against the
+    // new (possibly non-cargo) root.
+    let stale = false;
     void invoke<boolean>("has_cargo_project", { root })
       .then((yes) => {
-        if (yes) warmServer("rust");
+        if (yes && !stale) warmServer("rust");
       })
       .catch(() => {});
+    return () => {
+      stale = true;
+    };
   }, [rootPath, settings.editor.languageIntelligence]);
 
   function clampFontSize(size: number): number {

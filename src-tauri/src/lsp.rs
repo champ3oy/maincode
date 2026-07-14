@@ -281,6 +281,11 @@ pub async fn lsp_ensure_server(
 /// (node-based) arms are no-ops; download/go-install arms fetch + extract into
 /// the cache and emit `lsp-install-<id>` progress events.
 fn ensure_server_blocking(server_id: &str, app: &AppHandle) -> Result<(), String> {
+    // Warm the login-shell PATH cache here, on the blocking pool. The frontend
+    // always calls ensure before spawn, and the sync `lsp_spawn` (main thread)
+    // reads login_path() — without this, the FIRST spawn of any bundled server
+    // would pay the 200-500ms `$SHELL -lic` spawn on the UI thread.
+    let _ = login_path();
     match server_id {
         // Bundled (node-based): nothing to acquire.
         "typescript" | "python" | "bash" | "yaml" | "json" | "html" | "css" | "dockerfile" | "svelte" | "graphql" | "vue" => Ok(()),
@@ -289,7 +294,15 @@ fn ensure_server_blocking(server_id: &str, app: &AppHandle) -> Result<(), String
             // user's cargo). Fall back to a current standalone release only when
             // rustup is unavailable. Pin kept recent so the fallback also works
             // against a modern cargo's `cargo metadata`.
-            if rustup_which("rust-analyzer").is_some() || rustup_add("rust-analyzer") {
+            if rustup_which("rust-analyzer").is_some() {
+                return Ok(());
+            }
+            // `rustup component add` can download for several seconds — emit the
+            // same install/done events the download paths do, so the Settings
+            // panel's spinner starts AND clears (it clears on the "done" phase).
+            let _ = app.emit("lsp-install-rust", serde_json::json!({ "phase": "install" }));
+            if rustup_add("rust-analyzer") {
+                let _ = app.emit("lsp-install-rust", serde_json::json!({ "phase": "done" }));
                 return Ok(());
             }
             ensure_github_gz(
@@ -373,12 +386,21 @@ pub struct ServerStatus {
 }
 
 #[tauri::command]
-pub fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
+pub async fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
+    // On the blocking pool: `resolve_command("rust")` runs a `rustup which`
+    // subprocess (plus a cold login-shell PATH spawn if nothing warmed it), so a
+    // sync command would block the main thread every time Settings refreshes.
+    tauri::async_runtime::spawn_blocking(move || server_status_blocking(&app))
+        .await
+        .unwrap_or_default()
+}
+
+fn server_status_blocking(app: &AppHandle) -> Vec<ServerStatus> {
     let entry = |id: &str, label: &str, langs: &[&str], kind: &str| {
         let state = match kind {
             "bundled" => "builtin".to_string(),
             _ => {
-                let present = resolve_command(&app, id).map(|(c, _)| c.exists()).unwrap_or(false);
+                let present = resolve_command(app, id).map(|(c, _)| c.exists()).unwrap_or(false);
                 (if present { "installed" } else { "missing" }).to_string()
             }
         };
@@ -417,23 +439,29 @@ pub fn lsp_init_options(server_id: String, app: AppHandle) -> Result<Option<serd
 }
 
 #[tauri::command]
-pub fn lsp_remove_server(server_id: String) -> Result<(), String> {
-    // Only the known, Rust-authoritative server ids may be removed. This blocks
-    // absolute/`..` server_id values from escaping the cache dir (join() would
-    // otherwise resolve them to arbitrary paths).
-    if !matches!(server_id.as_str(), "typescript" | "python" | "rust" | "cpp" | "go") {
-        return Err(format!("unknown server id: {server_id}"));
-    }
-    let cache = cache_dir()?;
-    let dir = cache.join(&server_id);
-    // Defense in depth: the resolved dir must stay inside the cache root.
-    if !dir.starts_with(&cache) {
-        return Err("refusing to remove path outside cache".into());
-    }
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+pub async fn lsp_remove_server(server_id: String) -> Result<(), String> {
+    // On the blocking pool: removing e.g. the clangd tree is a multi-second
+    // `remove_dir_all` that would otherwise freeze the UI.
+    tauri::async_runtime::spawn_blocking(move || {
+        // Only the known, Rust-authoritative server ids may be removed. This blocks
+        // absolute/`..` server_id values from escaping the cache dir (join() would
+        // otherwise resolve them to arbitrary paths).
+        if !matches!(server_id.as_str(), "typescript" | "python" | "rust" | "cpp" | "go") {
+            return Err(format!("unknown server id: {server_id}"));
+        }
+        let cache = cache_dir()?;
+        let dir = cache.join(&server_id);
+        // Defense in depth: the resolved dir must stay inside the cache root.
+        if !dir.starts_with(&cache) {
+            return Err("refusing to remove path outside cache".into());
+        }
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("remove task panicked: {e}"))?
 }
 
 #[tauri::command]

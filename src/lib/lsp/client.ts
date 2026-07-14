@@ -42,6 +42,11 @@ export class LspClient implements IntelligenceClient {
   private readonly progressTokens = new Map<string | number, LspProgress>();
   private readonly progressListeners = new Set<(p: LspProgress | null) => void>();
   private isReady = false;
+  // Bumped by closeProject. openProject captures it and re-checks after each
+  // await: if a close/reopen happened mid-flight, the stale continuation must
+  // dispose the just-spawned transport (killing the server process) and bail —
+  // otherwise a rapid project switch leaks a running language server.
+  private epoch = 0;
 
   constructor(
     private readonly serverId: string,
@@ -50,10 +55,17 @@ export class LspClient implements IntelligenceClient {
 
   async openProject(root: string): Promise<void> {
     this.closeProject();
+    const epoch = this.epoch;
     const [{ transport }, initOptions] = await Promise.all([
       this.spawn(this.serverId, root),
       invoke<unknown>("lsp_init_options", { serverId: this.serverId }).catch(() => null),
     ]);
+    if (epoch !== this.epoch) {
+      // Closed while spawning: this.transport was never set, so closeProject
+      // couldn't stop this server — do it here.
+      transport.dispose();
+      return;
+    }
     this.transport = transport;
     transport.onMessage((m) => this.onMessage(m));
     transport.onExit(() => (this.isReady = false));
@@ -75,6 +87,7 @@ export class LspClient implements IntelligenceClient {
       workspaceFolders: [{ uri: pathToUri(root), name: root }],
       initializationOptions: initOptions ?? undefined,
     });
+    if (epoch !== this.epoch) return; // closed during initialize (transport already disposed)
     this.notify("initialized", {});
     this.isReady = true;
     // Replay didOpen for any docs opened while we were still initializing.
@@ -82,7 +95,11 @@ export class LspClient implements IntelligenceClient {
   }
 
   closeProject(): void {
+    this.epoch++;
     this.isReady = false;
+    // Reject (not just clear) so a mid-flight request — e.g. openProject's
+    // `initialize` — settles instead of awaiting forever.
+    this.pending.forEach((p) => p.reject(new Error("LSP client closed")));
     this.pending.clear();
     this.docs.clear();
     this.openedOnServer.clear();
@@ -295,9 +312,9 @@ export class LspClient implements IntelligenceClient {
 // match the actual language — not a blanket "typescript" (the prior bug, which
 // only happened to work because rust-analyzer/pyright ignore it).
 const LANGUAGE_ID: Record<string, string> = {
-  ts: "typescript", tsx: "typescriptreact",
+  ts: "typescript", tsx: "typescriptreact", mts: "typescript", cts: "typescript",
   js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascriptreact",
-  py: "python", rs: "rust", go: "go",
+  py: "python", pyi: "python", rs: "rust", go: "go",
   c: "c", h: "c", cc: "cpp", cpp: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
   json: "json", jsonc: "jsonc", html: "html", htm: "html", css: "css",
   yaml: "yaml", yml: "yaml", sh: "shellscript", bash: "shellscript",
@@ -306,6 +323,9 @@ const LANGUAGE_ID: Record<string, string> = {
 function languageId(path: string): string {
   const lower = path.toLowerCase();
   if (/(^|\/)dockerfile$/.test(lower) || lower.endsWith(".dockerfile")) return "dockerfile";
+  // tsconfig.json (and tsconfig.*.json) allow comments — the JSON server only
+  // tolerates them under the jsonc languageId (mirrors VS Code's mapping).
+  if (/(^|\/)tsconfig(\.[^/]+)?\.json$/.test(lower)) return "jsonc";
   const ext = lower.slice(lower.lastIndexOf(".") + 1);
   return LANGUAGE_ID[ext] ?? "plaintext";
 }

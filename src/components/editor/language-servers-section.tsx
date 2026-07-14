@@ -43,7 +43,12 @@ export function LanguageServersSection() {
     setErrors((e) => { const n = { ...e }; delete n[id]; return n; });
     setBusy((b) => ({ ...b, [id]: kind === "go-install" ? "install" : "download" }));
     void invoke("lsp_ensure_server", { serverId: id })
-      .then(refresh)
+      .then(() => {
+        // Clear busy on success too — not only via the "done" event — so an
+        // install path that emits no events can't leave the spinner stuck.
+        setBusy((b) => { const n = { ...b }; delete n[id]; return n; });
+        refresh();
+      })
       .catch((err) => {
         setBusy((b) => { const n = { ...b }; delete n[id]; return n; });
         setErrors((e) => ({ ...e, [id]: String(err) }));
