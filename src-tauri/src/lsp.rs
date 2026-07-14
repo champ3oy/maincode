@@ -197,16 +197,14 @@ pub struct ServerStatus {
 
 #[tauri::command]
 pub fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
-    let cache = cache_dir().ok();
     let entry = |id: &str, label: &str, langs: &[&str], kind: &str| {
-        let (state, present) = match kind {
-            "bundled" => ("builtin".to_string(), true),
+        let state = match kind {
+            "bundled" => "builtin".to_string(),
             _ => {
                 let present = resolve_command(&app, id).map(|(c, _)| c.exists()).unwrap_or(false);
-                ((if present { "installed" } else { "missing" }).to_string(), present)
+                (if present { "installed" } else { "missing" }).to_string()
             }
         };
-        let _ = (&cache, present);
         ServerStatus { server_id: id.into(), label: label.into(), languages: langs.iter().map(|s| s.to_string()).collect(), kind: kind.into(), state }
     };
     vec![
