@@ -1,3 +1,132 @@
+use std::collections::HashMap;
+use std::io::Write;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+struct LspSession {
+    child: Child,
+    stdin: ChildStdin,
+    root: String,
+    refcount: u32,
+}
+
+pub struct LspState {
+    sessions: Mutex<HashMap<u32, LspSession>>,
+    by_root: Mutex<HashMap<String, u32>>,
+    next_id: AtomicU32,
+}
+
+impl Default for LspState {
+    fn default() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            by_root: Mutex::new(HashMap::new()),
+            next_id: AtomicU32::new(1),
+        }
+    }
+}
+
+fn resource(app: &AppHandle, rel: &str) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .resolve(rel, tauri::path::BaseDirectory::Resource)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn lsp_spawn(root: String, app: AppHandle, state: State<LspState>) -> Result<u32, String> {
+    // Reuse an existing server for this root (refcount++).
+    {
+        let by_root = state.by_root.lock().map_err(|e| e.to_string())?;
+        if let Some(&id) = by_root.get(&root) {
+            let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+            if let Some(s) = sessions.get_mut(&id) {
+                s.refcount += 1;
+                return Ok(id);
+            }
+        }
+    }
+
+    let node = resource(&app, "lsp/node")?;
+    let cli = resource(
+        &app,
+        "lsp/server/node_modules/typescript-language-server/lib/cli.mjs",
+    )?;
+
+    let mut child = Command::new(node)
+        .arg(cli)
+        .arg("--stdio")
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("failed to spawn LSP server: {e}"))?;
+
+    let stdin = child.stdin.take().ok_or("no stdin")?;
+    let mut stdout = child.stdout.take().ok_or("no stdout")?;
+    let id = state.next_id.fetch_add(1, Ordering::SeqCst);
+
+    // Reader thread: accumulate bytes, drain complete frames, emit each.
+    let app_out = app.clone();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut carry: Vec<u8> = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    carry.extend_from_slice(&buf[..n]);
+                    for msg in parse_frames(&mut carry) {
+                        let _ = app_out.emit(&format!("lsp-msg-{id}"), msg);
+                    }
+                }
+            }
+        }
+        let _ = app_out.emit(&format!("lsp-exit-{id}"), ());
+    });
+
+    state
+        .sessions
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id, LspSession { child, stdin, root: root.clone(), refcount: 1 });
+    state
+        .by_root
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(root, id);
+    Ok(id)
+}
+
+#[tauri::command]
+pub fn lsp_send(id: u32, message: String, state: State<LspState>) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let s = sessions.get_mut(&id).ok_or("no such LSP session")?;
+    let framed = format!("Content-Length: {}\r\n\r\n{}", message.len(), message);
+    s.stdin.write_all(framed.as_bytes()).map_err(|e| e.to_string())?;
+    s.stdin.flush().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn lsp_stop(id: u32, state: State<LspState>) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+    let should_remove = {
+        let Some(s) = sessions.get_mut(&id) else { return Ok(()) };
+        s.refcount = s.refcount.saturating_sub(1);
+        s.refcount == 0
+    };
+    if should_remove {
+        if let Some(mut removed) = sessions.remove(&id) {
+            let _ = removed.child.kill();
+            state.by_root.lock().map_err(|e| e.to_string())?.remove(&removed.root);
+        }
+    }
+    Ok(())
+}
+
 /// Drain every complete LSP message (`Content-Length: N\r\n\r\n<N bytes>`) from
 /// `buf`, returning the JSON bodies. A partial trailing frame stays in `buf` for
 /// the next read. Framing is done in bytes so multibyte UTF-8 split across reads

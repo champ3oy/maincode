@@ -69,6 +69,7 @@ pub fn run() {
         })
         .manage(AppState::default())
         .manage(pty::PtyState::default())
+        .manage(lsp::LspState::default())
         .invoke_handler(tauri::generate_handler![
             git::open_repo,
             git::get_repo_status,
@@ -97,6 +98,9 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            lsp::lsp_spawn,
+            lsp::lsp_send,
+            lsp::lsp_stop,
             settings::read_settings,
             settings::write_settings,
             settings::settings_path,
