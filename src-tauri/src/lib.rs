@@ -65,6 +65,9 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 let label = window.label().to_string();
                 window.state::<AppState>().remove_window(&label);
+                // Stop any LSP servers this window owned — the JS dispose() may
+                // not run before the webview is torn down, which would leak them.
+                lsp::stop_window(&label, window.state::<lsp::LspState>());
             }
         })
         .manage(AppState::default())

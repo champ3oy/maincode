@@ -7,13 +7,18 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 struct LspSession {
     stdin: ChildStdin,
+    window_label: String,
     root: String,
     refcount: u32,
 }
 
 struct LspInner {
     sessions: HashMap<u32, LspSession>,
-    by_root: HashMap<String, u32>,
+    // Keyed by (window_label, root): each WINDOW gets its own server per root, so
+    // two windows on the same folder never share a session id (which would
+    // broadcast/misroute responses), and a window's teardown stops exactly its
+    // own sessions.
+    by_key: HashMap<(String, String), u32>,
 }
 
 pub struct LspState {
@@ -26,7 +31,7 @@ impl Default for LspState {
         Self {
             inner: Mutex::new(LspInner {
                 sessions: HashMap::new(),
-                by_root: HashMap::new(),
+                by_key: HashMap::new(),
             }),
             next_id: AtomicU32::new(1),
         }
@@ -40,13 +45,20 @@ fn resource(app: &AppHandle, rel: &str) -> Result<std::path::PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn lsp_spawn(root: String, app: AppHandle, state: State<LspState>) -> Result<u32, String> {
+pub fn lsp_spawn(
+    root: String,
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<LspState>,
+) -> Result<u32, String> {
+    let label = window.label().to_string();
+    let key = (label.clone(), root.clone());
     // Single lock over both maps, held across spawn so check-reuse-or-insert is
     // atomic: no lock-order inversion (one lock) and no TOCTOU duplicate server
-    // for the same root. Spawn is rare (once per project open), so briefly
-    // holding the lock across it is acceptable.
+    // for the same (window, root). Spawn is rare (once per project open), so
+    // briefly holding the lock across it is acceptable.
     let mut inner = state.inner.lock().map_err(|e| e.to_string())?;
-    if let Some(&id) = inner.by_root.get(&root) {
+    if let Some(&id) = inner.by_key.get(&key) {
         if let Some(s) = inner.sessions.get_mut(&id) {
             s.refcount += 1;
             return Ok(id);
@@ -75,8 +87,11 @@ pub fn lsp_spawn(root: String, app: AppHandle, state: State<LspState>) -> Result
     // The reader thread OWNS the child: it drains stdout to EOF (process exit),
     // then wait()s to reap it (no zombies), then emits exit. Both explicit stop
     // (lsp_stop drops the session's stdin → server exits on stdin EOF) and a
-    // self-exit/crash flow through this same EOF path.
+    // self-exit/crash flow through this same EOF path. Events are emitted to the
+    // OWNING window only (emit_to), so a same-root server in another window can't
+    // receive them.
     let app_out = app.clone();
+    let emit_label = label.clone();
     std::thread::spawn(move || {
         if let Some(mut stdout) = child.stdout.take() {
             let mut carry: Vec<u8> = Vec::new();
@@ -87,21 +102,26 @@ pub fn lsp_spawn(root: String, app: AppHandle, state: State<LspState>) -> Result
                     Ok(n) => {
                         carry.extend_from_slice(&buf[..n]);
                         for msg in parse_frames(&mut carry) {
-                            let _ = app_out.emit(&format!("lsp-msg-{id}"), msg);
+                            let _ = app_out.emit_to(emit_label.as_str(), &format!("lsp-msg-{id}"), msg);
                         }
                     }
                 }
             }
         }
         let _ = child.wait();
-        let _ = app_out.emit(&format!("lsp-exit-{id}"), ());
+        let _ = app_out.emit_to(emit_label.as_str(), &format!("lsp-exit-{id}"), ());
     });
 
     inner.sessions.insert(
         id,
-        LspSession { stdin, root: root.clone(), refcount: 1 },
+        LspSession {
+            stdin,
+            window_label: label,
+            root,
+            refcount: 1,
+        },
     );
-    inner.by_root.insert(root, id);
+    inner.by_key.insert(key, id);
     Ok(id)
 }
 
@@ -126,11 +146,34 @@ pub fn lsp_stop(id: u32, state: State<LspState>) -> Result<(), String> {
     };
     if should_remove {
         if let Some(removed) = inner.sessions.remove(&id) {
-            inner.by_root.remove(&removed.root);
+            inner.by_key.remove(&(removed.window_label, removed.root));
             drop(removed.stdin); // close stdin → server exits → reader thread reaps
         }
     }
     Ok(())
+}
+
+/// Stop and reap every LSP session owned by `label`'s window. Called from the
+/// window-Destroyed handler because the JS-side dispose()/lsp_stop may not run
+/// before the webview is torn down, which would otherwise leak the server +
+/// reader thread until app exit. Dropping each session's stdin makes the server
+/// exit on stdin EOF; its reader thread then wait()s and reaps it.
+pub fn stop_window(label: &str, state: State<LspState>) {
+    let Ok(mut inner) = state.inner.lock() else {
+        return;
+    };
+    let ids: Vec<u32> = inner
+        .sessions
+        .iter()
+        .filter(|(_, s)| s.window_label == label)
+        .map(|(&id, _)| id)
+        .collect();
+    for id in ids {
+        if let Some(removed) = inner.sessions.remove(&id) {
+            inner.by_key.remove(&(removed.window_label, removed.root));
+            drop(removed.stdin);
+        }
+    }
 }
 
 /// Drain every complete LSP message (`Content-Length: N\r\n\r\n<N bytes>`) from
