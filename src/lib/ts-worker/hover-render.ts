@@ -9,6 +9,7 @@
 // the per-kind signature colors.
 
 import { hoverKindColor } from "../cm-theme";
+import { highlightCodeToDom } from "./code-highlight";
 import { renderMarkdown } from "./markdown-dom";
 import type { HoverResult } from "./protocol";
 
@@ -49,6 +50,12 @@ function renderSignature(parts: HoverResult["signature"]): HTMLElement {
   const sig = document.createElement("div");
   sig.className = "cm-ts-hover-sig";
   for (const part of parts) {
+    // LSP delivers the signature as one plain code string (kind "code") rather
+    // than pre-colored TS display parts — syntax-highlight it like a code block.
+    if (part.kind === "code") {
+      sig.appendChild(highlightCodeToDom(part.text));
+      continue;
+    }
     const span = document.createElement("span");
     span.appendChild(document.createTextNode(part.text));
     const color = hoverKindColor(part.kind);
@@ -76,7 +83,7 @@ function renderTag(tag: { name: string; text: string }): HTMLElement {
       const pre = document.createElement("pre");
       pre.className = "cm-ts-hover-code";
       const code = document.createElement("code");
-      code.appendChild(document.createTextNode(stripExampleFences(text)));
+      code.appendChild(highlightCodeToDom(stripExampleFences(text)));
       pre.appendChild(code);
       block.appendChild(pre);
     }

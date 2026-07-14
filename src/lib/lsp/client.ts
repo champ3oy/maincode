@@ -250,7 +250,8 @@ function splitHoverMarkdown(md: string): HoverResult {
   if (m) {
     const sig = m[1].trim();
     const rest = md.slice(m[0].length).trim();
-    return { signature: [{ text: sig, kind: "text" }], documentation: rest, tags: [] };
+    // kind "code" tells the renderer to syntax-highlight this signature block.
+    return { signature: [{ text: sig, kind: "code" }], documentation: rest, tags: [] };
   }
   return { signature: [], documentation: md.trim(), tags: [] };
 }

@@ -64,7 +64,7 @@ export function hoverKindColor(kind: string): string | undefined {
   }
 }
 
-const pierreHighlight = HighlightStyle.define([
+export const pierreHighlight = HighlightStyle.define([
   { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: c.comment },
   {
     tag: [

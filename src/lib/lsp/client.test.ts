@@ -104,7 +104,7 @@ describe("LspClient", () => {
     const hover = await p;
     // Leading ```typescript block becomes the (raw, monospace) signature; the
     // rest stays markdown so renderMarkdown formats the prose + @example fence.
-    expect(hover?.signature).toEqual([{ text: "const x: number", kind: "text" }]);
+    expect(hover?.signature).toEqual([{ text: "const x: number", kind: "code" }]);
     expect(hover?.documentation).toContain("A number.");
     expect(hover?.documentation).toContain("*@example*");
     expect(hover?.documentation).toContain("```ts");

@@ -1,13 +1,15 @@
-// Dependency-free markdown → DOM renderer for TS hover docs.
+// Small markdown → DOM renderer for TS hover docs.
 //
 // SECURITY: this renders JSDoc pulled from arbitrary node_modules — untrusted
 // input. It NEVER assigns innerHTML; every node is built via the DOM API
 // (createElement / createTextNode / appendChild), so there is zero HTML-parsing
 // surface and thus zero XSS risk. Unmatched markup markers are emitted as
-// literal text rather than being interpreted.
+// literal text rather than being interpreted. Code-block syntax highlighting
+// (highlightCodeToDom) is also DOM-only — token text goes through createTextNode.
 //
 // Supported subset (intentionally small):
 //   - Fenced code blocks:  ```lang\n…\n```  → <pre class="cm-ts-hover-code"><code>…</code></pre>
+//                                             (JS/TS-family blocks are syntax-highlighted)
 //   - Paragraphs (blank-line separated)     → <p>
 //   - Inline (within paragraphs):
 //       `code`                              → <code>
@@ -15,6 +17,8 @@
 //       *italic* / _italic_                 → <em>
 //       [text](url)                         → <a title="url"> (text only; no navigation)
 //       {@link X} / {@linkcode X}           → <code> (styled X)
+
+import { highlightCodeToDom, isTsFamily } from "./code-highlight";
 
 /**
  * Render a markdown string into a DocumentFragment. Safe for untrusted input:
@@ -28,7 +32,11 @@ export function renderMarkdown(md: string): DocumentFragment {
       const pre = document.createElement("pre");
       pre.className = "cm-ts-hover-code";
       const code = document.createElement("code");
-      code.appendChild(document.createTextNode(block.text));
+      if (isTsFamily(block.lang)) {
+        code.appendChild(highlightCodeToDom(block.text));
+      } else {
+        code.appendChild(document.createTextNode(block.text));
+      }
       pre.appendChild(code);
       frag.appendChild(pre);
     } else {
@@ -40,7 +48,7 @@ export function renderMarkdown(md: string): DocumentFragment {
   return frag;
 }
 
-type Block = { type: "code"; text: string } | { type: "para"; text: string };
+type Block = { type: "code"; text: string; lang: string } | { type: "para"; text: string };
 
 /**
  * Split markdown into fenced-code and paragraph blocks. Fenced blocks are
@@ -67,8 +75,9 @@ function splitBlocks(md: string): Block[] {
     const fence = lines[i].trimStart();
     if (fence.startsWith("```")) {
       flushPara();
-      // Consume until the closing fence (or EOF). The opening line's info string
-      // (language) is discarded — v1 does no syntax highlighting.
+      // The opening line's info string is the language (e.g. ```tsx → "tsx").
+      const lang = fence.slice(3).trim();
+      // Consume until the closing fence (or EOF).
       const body: string[] = [];
       i++;
       while (i < lines.length && !lines[i].trimStart().startsWith("```")) {
@@ -76,7 +85,7 @@ function splitBlocks(md: string): Block[] {
         i++;
       }
       // `i` now sits on the closing fence (or past EOF); the for-loop's i++ skips it.
-      blocks.push({ type: "code", text: body.join("\n") });
+      blocks.push({ type: "code", text: body.join("\n"), lang });
     } else {
       para.push(lines[i]);
     }
