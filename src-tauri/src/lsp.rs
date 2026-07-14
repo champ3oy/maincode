@@ -146,16 +146,26 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
 }
 
 /// A PATH that includes the user's login-shell PATH, so spawned language servers
-/// can find toolchains (go/python/cargo) even when the app was launched from
-/// Finder with a minimal PATH. Mirrors pty.rs's login-shell rationale.
+/// can find toolchains (go/python/cargo/rustup) even when the app was launched
+/// from Finder with a minimal PATH. Mirrors pty.rs's login-shell rationale.
+///
+/// Cached for the process: computing it spawns `$SHELL -lic` which sources the
+/// full shell profile (often 200-500ms). A single Rust open resolves it several
+/// times (ensure + rustup lookups + child env), so caching removes repeated
+/// heavy shell spawns — some of which ran on the UI thread during spawn.
+static LOGIN_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 fn login_path() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let out = std::process::Command::new(shell)
-        .args(["-lic", "printf %s \"$PATH\""])
-        .output()
-        .ok()?;
-    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if p.is_empty() { None } else { Some(p) }
+    LOGIN_PATH
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+            let out = std::process::Command::new(shell)
+                .args(["-lic", "printf %s \"$PATH\""])
+                .output()
+                .ok()?;
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if p.is_empty() { None } else { Some(p) }
+        })
+        .clone()
 }
 
 fn cache_dir() -> Result<std::path::PathBuf, String> {
