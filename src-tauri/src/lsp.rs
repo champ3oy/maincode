@@ -186,6 +186,47 @@ pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct ServerStatus {
+    server_id: String,
+    label: String,
+    languages: Vec<String>,
+    kind: String,  // "bundled" | "github-release" | "go-install"
+    state: String, // "builtin" | "installed" | "missing"
+}
+
+#[tauri::command]
+pub fn lsp_server_status(app: AppHandle) -> Vec<ServerStatus> {
+    let cache = cache_dir().ok();
+    let entry = |id: &str, label: &str, langs: &[&str], kind: &str| {
+        let (state, present) = match kind {
+            "bundled" => ("builtin".to_string(), true),
+            _ => {
+                let present = resolve_command(&app, id).map(|(c, _)| c.exists()).unwrap_or(false);
+                ((if present { "installed" } else { "missing" }).to_string(), present)
+            }
+        };
+        let _ = (&cache, present);
+        ServerStatus { server_id: id.into(), label: label.into(), languages: langs.iter().map(|s| s.to_string()).collect(), kind: kind.into(), state }
+    };
+    vec![
+        entry("typescript", "TypeScript / JavaScript", &["ts", "tsx", "js", "jsx"], "bundled"),
+        entry("python", "Python (Pyright)", &["py"], "bundled"),
+        entry("rust", "Rust (rust-analyzer)", &["rs"], "github-release"),
+        entry("cpp", "C / C++ (clangd)", &["c", "cpp"], "github-release"),
+        entry("go", "Go (gopls)", &["go"], "go-install"),
+    ]
+}
+
+#[tauri::command]
+pub fn lsp_remove_server(server_id: String) -> Result<(), String> {
+    let dir = cache_dir()?.join(&server_id);
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn lsp_spawn(
     server_id: String,
