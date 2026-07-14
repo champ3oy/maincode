@@ -8,6 +8,49 @@ entries under a new version heading.
 
 ## [Unreleased]
 
+### Added
+- Editor: **language intelligence for 14 languages** — real error squiggles, hover
+  docs, completions, and ⌘-click go-to-definition now work for Python, Rust, Go,
+  C/C++, Bash, YAML, JSON, HTML, CSS, Dockerfile, Svelte, GraphQL, and Vue (in
+  addition to JS/TS) — each powered by its real language server (Pyright,
+  rust-analyzer, gopls, clangd, …) speaking the Language Server Protocol.
+- Settings: **Language Servers panel** — see every server and its state
+  (Built-in / Installed / Missing), install the downloadable ones with live
+  progress, or remove them. Rust prefers the rustup toolchain's rust-analyzer so
+  it always matches your cargo; Go installs gopls via your Go toolchain; C/C++
+  downloads clangd from its official release — all cached under
+  `~/.config/maincode/servers`, so the app bundle stays small.
+- Status bar: **live indexing progress** (e.g. "rust-analyzer: Indexing 45%")
+  while a language server warms up. Opening a project that contains Rust
+  pre-warms rust-analyzer in the background so it's often ready before you open
+  a `.rs` file.
+- Editor: hover cards render **markdown with syntax-highlighted code blocks**
+  (signatures, `@example` fences, prose formatting).
+- Editor: syntax highlighting for many more file types — TOML, `.env`, INI,
+  shell, Dockerfile, XML, SQL, Java, Kotlin, C#, Swift, Ruby, Lua, diff, and
+  more (including extension-less files like `Dockerfile` and dotfiles like
+  `.bashrc`).
+
+### Changed
+- The TypeScript engine moved from an in-app compiler worker to the real
+  **typescript-language-server** — faster and markedly more accurate on
+  monorepos, NestJS, Next.js, and React Native projects (no more phantom
+  "cannot find module" squiggles). The "TypeScript Intelligence" setting is now
+  **"Language Intelligence"** and governs all languages.
+
+### Fixed
+- Error tooltips near the top of the file flip below the line instead of
+  clipping offscreen.
+- Intelligence activates on the first opened file — previously diagnostics and
+  hover stayed dead until you switched tabs and back.
+- Installing a language server no longer freezes the app — installs run in the
+  background with visible phase progress, and failures surface a readable error
+  with a Retry button (e.g. "Go toolchain not found").
+- Each window gets its own language-server sessions (no cross-window
+  diagnostics bleed), and closing a window stops exactly its own servers.
+- Rapidly switching projects while a language server was still starting no
+  longer leaks the server process.
+
 ## [0.1.2] — 2026-07-13
 
 ### Added
