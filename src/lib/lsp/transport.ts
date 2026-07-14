@@ -14,14 +14,16 @@ export async function spawnServer(root: string): Promise<{ id: number; transport
   const id = await invoke<number>("lsp_spawn", { root });
   const msgListeners = new Set<(m: string) => void>();
   const exitListeners = new Set<() => void>();
-  const unlisten: UnlistenFn[] = [];
 
-  void listen<string>(`lsp-msg-${id}`, (e) => msgListeners.forEach((cb) => cb(e.payload))).then(
-    (u) => unlisten.push(u),
-  );
-  void listen(`lsp-exit-${id}`, () => exitListeners.forEach((cb) => cb())).then((u) =>
-    unlisten.push(u),
-  );
+  // Await the listen() registrations so the backend event subscriptions are live
+  // BEFORE we return. Otherwise an early lsp-msg-<id> (e.g. the initialize
+  // response) can be emitted before the listener attaches and be dropped, hanging
+  // the client. Awaiting also guarantees `unlisten` is fully populated before any
+  // caller can dispose(), so no listener registration leaks on a fast dispose.
+  const unlisten: UnlistenFn[] = await Promise.all([
+    listen<string>(`lsp-msg-${id}`, (e) => msgListeners.forEach((cb) => cb(e.payload))),
+    listen(`lsp-exit-${id}`, () => exitListeners.forEach((cb) => cb())),
+  ]);
 
   const transport: Transport = {
     send: (message) => invoke("lsp_send", { id, message }),
