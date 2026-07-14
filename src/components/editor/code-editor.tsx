@@ -371,8 +371,12 @@ export function CodeEditor({
     viewRef.current = view;
     view.focus();
     // Tell the routed intelligence client (if any) this document is now open.
-    const client = getClient.current();
-    if (client?.ready()) client.notifyDocOpened(pathRef.current, content);
+    // Notify UNCONDITIONALLY — even before the server is ready. The client
+    // buffers didOpen and replays it once `initialize` resolves, so features
+    // (diagnostics/hover/completion) light up on first open. Gating this on
+    // ready() dropped the first file's didOpen, so nothing worked until a tab
+    // switch re-opened the doc against the now-ready server.
+    getClient.current()?.notifyDocOpened(pathRef.current, content);
     return () => {
       view.destroy();
       viewRef.current = null;
@@ -413,8 +417,8 @@ export function CodeEditor({
     view.setState(cached ?? makeStateRef.current(path, content));
     view.focus();
     // Routed by the NEW path (pathRef.current was just updated above).
-    const c = getClient.current();
-    if (c?.ready()) c.notifyDocOpened(path, content);
+    // Unconditional (client buffers until ready — see the mount effect).
+    getClient.current()?.notifyDocOpened(path, content);
   }, [path, content]);
 
   // Keep the theme in sync (also re-applied after state swaps, which may
@@ -505,6 +509,12 @@ export function CodeEditor({
   //
   // Warm-up fires many `typesUpdated` events (one per resolution round); debounce
   // so the burst collapses into ONE reconfigure after types settle.
+  //
+  // Re-subscribed on every `path` change so the listener follows the ACTIVE
+  // document's client: switching e.g. a.ts → b.py routes to a different language
+  // server, and its pushed diagnostics must trigger this re-lint. A mount-only
+  // (`[]`) subscription stayed bound to the first file's client, so a later
+  // file's diagnostics never refreshed until an unrelated re-lint.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = getClient.current()?.onTypesUpdated(() => {
@@ -528,7 +538,7 @@ export function CodeEditor({
       if (timer) clearTimeout(timer);
       unsub?.();
     };
-  }, []);
+  }, [path]);
 
   // Go-to-definition reveal: when App sets `revealTarget` for the ACTIVE path
   // (after openFile), scroll to and select the start of the target line ONCE,
