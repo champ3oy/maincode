@@ -271,14 +271,14 @@ export function SettingsView({ onEditJson }: SettingsViewProps) {
         ),
       },
       {
-        id: "editor-typescript",
-        label: "TypeScript Intelligence",
-        description: "Semantic completions, auto-imports, and type errors for JS/TS.",
+        id: "editor-language-intelligence",
+        label: "Language Intelligence",
+        description: "Semantic completions, hover, go-to-definition, and diagnostics across all supported languages (TypeScript, Python, Rust, Go, C/C++).",
         category: "Editor",
         control: (
           <Toggle
-            value={settings.editor.typescript}
-            onChange={(typescript) => patch({ editor: { typescript } })}
+            value={settings.editor.languageIntelligence}
+            onChange={(languageIntelligence) => patch({ editor: { languageIntelligence } })}
           />
         ),
       },

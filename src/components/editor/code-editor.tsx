@@ -78,10 +78,12 @@ interface CodeEditorProps {
     fn: (path: string, config: object) => Promise<string | null>,
   ) => void;
   /**
-   * Cmd/Ctrl+Click go-to-definition. Called with the resolved TS definition
-   * target so the app can open the file and reveal the location. Only wired when
-   * the TS worker is enabled (see `typescript` gate). If omitted, Cmd+Click is
-   * a no-op and normal text interaction is preserved.
+   * Cmd/Ctrl+Click go-to-definition. Called with the resolved definition target
+   * so the app can open the file and reveal the location. Only wired when
+   * Language Intelligence is enabled (see `languageIntelligence` gate); the
+   * routed client resolves per-language, so this works for every supported
+   * language. If omitted, Cmd+Click is a no-op and normal text interaction is
+   * preserved.
    */
   onGoToDefinition?: (target: DefinitionResult) => void;
   /**
@@ -116,7 +118,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, languageIntelligence } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -151,8 +153,8 @@ export function CodeEditor({
   lintingRef.current = linting;
   const lintCompartment = useRef(new Compartment());
 
-  const typescriptRef = useRef(typescript);
-  typescriptRef.current = typescript;
+  const languageIntelligenceRef = useRef(languageIntelligence);
+  languageIntelligenceRef.current = languageIntelligence;
 
   // Stable getter so extension closures resolve the routed intelligence client
   // lazily (returns null when the active path's language has no LSP server).
@@ -180,7 +182,7 @@ export function CodeEditor({
   // Single source of truth for the lint compartment's contents. Both makeState
   // and the live-reconfigure paths (settings effect, onTypesUpdated) build
   // identical config through here so a compartment reconfigure never diverges
-  // from the initial state. `linting`/`typescript` are passed explicitly so
+  // from the initial state. `linting`/`languageIntelligence` are passed explicitly so
   // effects can hand in the reactive values while makeState hands in the refs.
   const buildLintExtensions = useRef(
     (docPath: string, lintingEnabled: boolean, tsEnabled: boolean) =>
@@ -293,11 +295,11 @@ export function CodeEditor({
         completionCompartment.current.of(
           completionExtensions(
             autocompleteRef.current,
-            typescriptRef.current ? { source: tsExtensions.current.source } : undefined,
+            languageIntelligenceRef.current ? { source: tsExtensions.current.source } : undefined,
           ),
         ),
         lintCompartment.current.of(
-          buildLintExtensions.current(docPath, lintingRef.current, typescriptRef.current),
+          buildLintExtensions.current(docPath, lintingRef.current, languageIntelligenceRef.current),
         ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -319,16 +321,18 @@ export function CodeEditor({
             }
           }
         }),
-        // Cmd/Ctrl+Click go-to-definition. Gated on the TS worker being on
-        // (typescriptRef) and the active file being a TS-worker path; otherwise we
-        // leave the event alone so normal click/selection behaves as usual. When we
-        // do handle it we preventDefault so the browser doesn't also place the caret
-        // / start a text selection at the click point.
+        // Cmd/Ctrl+Click go-to-definition. Gated on Language Intelligence being
+        // on (languageIntelligenceRef); the routed intelligence client
+        // (getClient) resolves to null for languages without a server, so this
+        // works for every supported language. Otherwise we leave the event alone
+        // so normal click/selection behaves as usual. When we do handle it we
+        // preventDefault so the browser doesn't also place the caret / start a
+        // text selection at the click point.
         EditorView.domEventHandlers({
           mousedown: (event, view) => {
             if (!(event.metaKey || event.ctrlKey)) return false;
             const goto = onGoToDefinitionRef.current;
-            if (!goto || !typescriptRef.current) return false;
+            if (!goto || !languageIntelligenceRef.current) return false;
             const p = pathRef.current;
             const client = getClient.current();
             if (!client || !client.ready()) return false;
@@ -345,12 +349,13 @@ export function CodeEditor({
         }),
         // Cmd/Ctrl-hover affordance: underlines the hovered identifier + shows a
         // pointer while the modifier is held, so Cmd+Click go-to-def is
-        // discoverable. Self-gates on typescript + isTsWorkerPath; purely visual,
-        // never preventDefaults, so it never interferes with the mousedown
-        // handler above or normal selection.
+        // discoverable. Self-gates on Language Intelligence + hasLspServer(path)
+        // (see cm.ts), so the underline cue shows for any language with a server;
+        // purely visual, never preventDefaults, so it never interferes with the
+        // mousedown handler above or normal selection.
         tsGoToDefHoverAffordance(
           () => pathRef.current,
-          () => typescriptRef.current,
+          () => languageIntelligenceRef.current,
         ),
       ],
     });
@@ -459,7 +464,7 @@ export function CodeEditor({
 
   // Apply autocomplete live; path dep ensures JSON-specific linter is correct
   // after tab swaps (lint compartment depends on languageKey for JSON linter).
-  // typescript dep ensures TS sources are added/removed when the toggle changes.
+  // languageIntelligence dep ensures TS sources are added/removed when the toggle changes.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
@@ -467,23 +472,23 @@ export function CodeEditor({
       effects: completionCompartment.current.reconfigure(
         completionExtensions(
           autocomplete,
-          typescript ? { source: tsExtensions.current.source } : undefined,
+          languageIntelligence ? { source: tsExtensions.current.source } : undefined,
         ),
       ),
     });
-  }, [autocomplete, typescript, path]);
+  }, [autocomplete, languageIntelligence, path]);
 
   // Apply linting live; path dep recomputes languageKey so JSON docs get the
-  // JSON linter after tab swaps. typescript dep gates TS diagnostic sources.
+  // JSON linter after tab swaps. languageIntelligence dep gates TS diagnostic sources.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
       effects: lintCompartment.current.reconfigure(
-        buildLintExtensions.current(path, linting, typescript),
+        buildLintExtensions.current(path, linting, languageIntelligence),
       ),
     });
-  }, [linting, typescript, path]);
+  }, [linting, languageIntelligence, path]);
 
   // When the TS worker loads new types (e.g., node_modules/@types), re-run the
   // linter so diagnostics reflect the updated type info.
@@ -513,7 +518,7 @@ export function CodeEditor({
             buildLintExtensions.current(
               pathRef.current,
               lintingRef.current,
-              typescriptRef.current,
+              languageIntelligenceRef.current,
             ),
           ),
         });

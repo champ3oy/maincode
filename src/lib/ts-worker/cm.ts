@@ -9,10 +9,9 @@ import {
   type Extension,
 } from "@codemirror/view";
 import { StateEffect, StateField } from "@codemirror/state";
-import { isTsWorkerPath } from "./client";
 import type { CompletionItemData } from "./protocol";
 import { renderHover } from "./hover-render";
-import type { IntelligenceClient } from "@/lib/intelligence";
+import { hasLspServer, type IntelligenceClient } from "@/lib/intelligence";
 
 const KIND_MAP: Record<string, string> = {
   var: "variable", let: "variable", const: "variable", "local var": "variable",
@@ -115,15 +114,17 @@ export function tsLinterExtension(
 
 /**
  * VS Code-style Cmd/Ctrl-hover affordance for go-to-definition. While the user
- * holds Cmd (metaKey; Ctrl on non-mac) and hovers an identifier in a TS/JS file,
- * the hovered word is underlined and the cursor becomes a pointer — signalling
- * it's clickable (the existing Cmd+Click mousedown handler does the navigation).
+ * holds Cmd (metaKey; Ctrl on non-mac) and hovers an identifier in a file whose
+ * language has a server, the hovered word is underlined and the cursor becomes a
+ * pointer — signalling it's clickable (the existing Cmd+Click mousedown handler
+ * does the navigation).
  *
- * Self-gates on the caller's `enabled()` (settings.editor.typescript) plus
- * `isTsWorkerPath(path)`. It only ever adds a passive mark decoration + cursor
- * style; it never calls preventDefault or dispatches selection changes, so it
- * cannot interfere with Cmd+Click go-to-def or with normal text selection when
- * Cmd isn't held.
+ * Self-gates on the caller's `enabled()` (settings.editor.languageIntelligence)
+ * plus `hasLspServer(path)`, so the cue shows for every supported language
+ * (TypeScript, Python, Rust, Go, C/C++), not just TS/JS. It only ever adds a
+ * passive mark decoration + cursor style; it never calls preventDefault or
+ * dispatches selection changes, so it cannot interfere with Cmd+Click go-to-def
+ * or with normal text selection when Cmd isn't held.
  */
 const cmdHoverMark = Decoration.mark({
   class: "cm-cmd-hover-link",
@@ -162,7 +163,7 @@ export function tsGoToDefHoverAffordance(
   getPath: () => string,
   enabled: () => boolean,
 ): Extension {
-  const active = (): boolean => enabled() && isTsWorkerPath(getPath());
+  const active = (): boolean => enabled() && hasLspServer(getPath());
 
   const plugin = ViewPlugin.fromClass(
     class {

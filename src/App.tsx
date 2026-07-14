@@ -93,8 +93,8 @@ function App() {
   // Set (or clear) the project root on the client manager so per-language LSP
   // clients are lazily created/opened as files route to them.
   useEffect(() => {
-    setProjectRoot(rootPath && settings.editor.typescript ? rootPath : null);
-  }, [rootPath, settings.editor.typescript]);
+    setProjectRoot(rootPath && settings.editor.languageIntelligence ? rootPath : null);
+  }, [rootPath, settings.editor.languageIntelligence]);
 
   function clampFontSize(size: number): number {
     return Math.min(32, Math.max(8, Math.round(size)));
@@ -859,7 +859,7 @@ function App() {
                     onCursor={(line, col) => setCursor({ line, col })}
                     formatRoot={rootPath}
                     onGoToDefinition={
-                      settings.editor.typescript
+                      settings.editor.languageIntelligence
                         ? handleGoToDefinition
                         : undefined
                     }
