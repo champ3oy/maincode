@@ -3,6 +3,7 @@ import {
   packageFileCandidates,
   scriptKindForPath,
   mapCompilerOptions,
+  mergeConfigPaths,
   tsDiagnosticsToData,
   tsCompletionsToData,
 } from "./mapping";
@@ -56,6 +57,65 @@ describe("mapCompilerOptions", () => {
     const o = mapCompilerOptions('{"compilerOptions":{"strict":true,"checkJs":true}}', fakeTs);
     expect(o.strict).toBe(true);
     expect(o.checkJs).toBe(true);
+  });
+  it("forwards path aliases and absolutizes baseUrl against root", () => {
+    const o = mapCompilerOptions(
+      '{"compilerOptions":{"paths":{"@/*":["./*"]},"baseUrl":"./src"}}',
+      fakeTs,
+      "/proj",
+    );
+    expect(o.paths).toEqual({ "@/*": ["./*"] });
+    expect(o.baseUrl).toBe("/proj/src"); // "./src" joined onto root
+  });
+  it("forwards paths with no baseUrl (base falls back to host cwd = root at runtime)", () => {
+    const o = mapCompilerOptions('{"compilerOptions":{"paths":{"@/*":["./*"]}}}', fakeTs, "/proj");
+    expect(o.paths).toEqual({ "@/*": ["./*"] });
+    expect(o.baseUrl).toBeUndefined();
+  });
+  it("collapses a '.'-style baseUrl to the project root", () => {
+    const o = mapCompilerOptions('{"compilerOptions":{"baseUrl":"./"}}', fakeTs, "/proj");
+    expect(o.baseUrl).toBe("/proj");
+  });
+});
+
+describe("mergeConfigPaths", () => {
+  const fakeTs = {}; // no parseConfigFileTextToJson → JSON.parse path
+
+  it("rebases each package's @/* to its own absolute dir and unions them", () => {
+    const merged = mergeConfigPaths(
+      [
+        { dir: "/repo/mobile", text: '{"compilerOptions":{"paths":{"@/*":["./*"]}}}' },
+        { dir: "/repo/apps/api", text: '{"compilerOptions":{"paths":{"@/*":["./*"]}}}' },
+      ],
+      fakeTs,
+    );
+    // Same pattern from two packages → both absolute candidates, wildcard kept.
+    expect(merged).toEqual({ "@/*": ["/repo/mobile/*", "/repo/apps/api/*"] });
+  });
+
+  it("honors a per-config baseUrl when rebasing substitutions", () => {
+    const merged = mergeConfigPaths(
+      [{ dir: "/repo/web", text: '{"compilerOptions":{"baseUrl":"src","paths":{"@/*":["*"]}}}' }],
+      fakeTs,
+    );
+    expect(merged).toEqual({ "@/*": ["/repo/web/src/*"] });
+  });
+
+  it("returns undefined when no config declares paths", () => {
+    expect(
+      mergeConfigPaths([{ dir: "/repo/api", text: '{"compilerOptions":{"strict":true}}' }], fakeTs),
+    ).toBeUndefined();
+  });
+
+  it("skips malformed config text without throwing", () => {
+    const merged = mergeConfigPaths(
+      [
+        { dir: "/a", text: "{not json" },
+        { dir: "/b", text: '{"compilerOptions":{"paths":{"~/*":["./lib/*"]}}}' },
+      ],
+      fakeTs,
+    );
+    expect(merged).toEqual({ "~/*": ["/b/lib/*"] });
   });
 });
 

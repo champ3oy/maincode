@@ -14,6 +14,10 @@ import { scriptKindForPath } from "./mapping";
 
 const PRELOAD_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|json)$/i;
 const PRELOAD_CAP = 2000;
+// tsconfig.json, jsconfig.json, and variants like tsconfig.base.json — anchored
+// to a path segment start so we don't match e.g. `my.tsconfig.json`.
+const CONFIG_RE = /(^|\/)(tsconfig|jsconfig)(\..+)?\.json$/i;
+const CONFIG_CAP = 50;
 
 export function preloadFilter(paths: string[]): string[] {
   return paths.filter((p) => PRELOAD_EXT.test(p)).slice(0, PRELOAD_CAP);
@@ -100,11 +104,28 @@ class Client implements TsClient {
       (await readFile(`${root}/tsconfig.json`).then((r) => r.content).catch(() => null)) ??
       (await readFile(`${root}/jsconfig.json`).then((r) => r.content).catch(() => null));
     if (seq !== this.openSeq) return;
+    // Discover every ts/jsconfig in the workspace (monorepos keep one per
+    // package, often with a `@/*` alias, and may have none at the root). Their
+    // dirs let the worker rebase each package's `paths` correctly. `rel` came
+    // from listFilesRecursive, which already skips node_modules/dist/etc.
+    const configRels = rel.filter((r) => CONFIG_RE.test(r)).slice(0, CONFIG_CAP);
+    const tsconfigs = (
+      await Promise.all(
+        configRels.map(async (r) => {
+          const abs = `${root}/${r}`;
+          const text = await readFile(abs).then((x) => x.content).catch(() => null);
+          if (text === null) return null;
+          return { dir: abs.slice(0, abs.lastIndexOf("/")), text };
+        }),
+      )
+    ).filter((c): c is { dir: string; text: string } => c !== null);
+    if (seq !== this.openSeq) return;
     await this.rpc!.request({
       kind: "openProject",
       root,
       files: sources.filter((s): s is { path: string; content: string } => s !== null),
       tsconfigText,
+      tsconfigs,
     });
     if (seq !== this.openSeq) return;
     this.isReady = true;

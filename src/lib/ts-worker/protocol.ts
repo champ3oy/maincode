@@ -55,7 +55,18 @@ export interface DefinitionResult {
 }
 
 export type WorkerRequest =
-  | { kind: "openProject"; root: string; files: { path: string; content: string }[]; tsconfigText: string | null }
+  | {
+      kind: "openProject";
+      root: string;
+      files: { path: string; content: string }[];
+      tsconfigText: string | null;
+      // All tsconfig/jsconfig files discovered in the workspace, each with its
+      // directory. Their `paths` are merged (rebased to absolute) so aliases like
+      // `@/*` resolve per-sub-package in a monorepo — where each package has its
+      // own tsconfig and there may be no config at the workspace root. Optional
+      // for back-compat: when absent, only tsconfigText's paths apply.
+      tsconfigs?: { dir: string; text: string }[];
+    }
   | { kind: "docChanged"; path: string; content: string; version: number }
   | { kind: "completions"; path: string; offset: number }
   | { kind: "completionDetails"; path: string; offset: number; entryName: string; source?: string; data?: unknown }

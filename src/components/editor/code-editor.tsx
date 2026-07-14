@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { Compartment, EditorState, EditorSelection, Prec } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, tooltips } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { search } from "@codemirror/search";
@@ -23,6 +23,19 @@ import {
 import { scriptKindForPath } from "@/lib/ts-worker/mapping";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
 import { FindWidget } from "./find-widget";
+
+// Constrain tooltip positioning (lint messages, TS hover, autocomplete) to the
+// editor's own box instead of the whole browser window (CodeMirror's default).
+// The lint package always requests its diagnostic tooltip `above` the line. With
+// the window as the reference, the positioner sees room above a diagnostic on
+// the first visible lines — all the way to the window top — so it renders the
+// tooltip up there, behind the tab bar / header chrome sitting above the editor,
+// and it gets clipped (the reported bug). Bounding the space to the editor rect
+// raises the "top" to the editor's own top edge, so the positioner flips the
+// tooltip *below* the line when there's no room above — matching the TS hover.
+const editorTooltipSpace = tooltips({
+  tooltipSpace: (view) => view.dom.getBoundingClientRect(),
+});
 
 // In light mode, keep CodeMirror's default highlighting but make the surface
 // transparent so it blends with the app background.
@@ -228,6 +241,7 @@ export function CodeEditor({
         search({ top: true }),
         searchMatchTheme,
         tooltipTheme,
+        editorTooltipSpace,
         keymap.of([
           {
             key: "Mod-s",

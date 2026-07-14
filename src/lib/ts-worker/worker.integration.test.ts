@@ -78,7 +78,8 @@ async function runLoop(
   root: string,
   file: string,
   source: string,
-  tsconfigText: string,
+  tsconfigText: string | null,
+  tsconfigs?: { dir: string; text: string }[],
 ): Promise<{ diags: Diag[]; rounds: number; max: number }> {
   let pendingNeed: string[] | null = null;
   let typesUpdated = false;
@@ -93,6 +94,7 @@ async function runLoop(
     root,
     files: [{ path: file, content: source }],
     tsconfigText,
+    tsconfigs,
   });
 
   const MAX_ROUNDS = 25;
@@ -230,6 +232,81 @@ describe("ts-worker on-demand node_modules resolution (integration)", () => {
     },
     30_000,
   );
+
+  it(
+    "lazily loads an un-preloaded source file (regression: only node_modules was fetchable)",
+    async () => {
+      // The imported sibling is a real source file that is NOT in the preload
+      // (openProject sends only the entry). Before the fix, host.want() fired
+      // only for /node_modules/ paths, so this sibling could never enter the VFS
+      // and "./sibling" stayed "Cannot find module" forever — the RN/Expo failure
+      // mode where native build dirs starve the preload of actual source.
+      const root = srcFixtureRoot;
+      const file = `${root}/entry.ts`;
+      const source = 'import { hello } from "./sibling";\nexport const y = hello + 1;\n';
+      const { diags, rounds, max } = await runLoop(
+        root,
+        file,
+        source,
+        JSON.stringify({ compilerOptions: {} }),
+      );
+      const messages = diags.map((d) => d.message).join("\n");
+      expect(messages).not.toMatch(/Cannot find module '\.\/sibling'/);
+      expect(rounds).toBeLessThan(max);
+    },
+    30_000,
+  );
+
+  it(
+    "resolves tsconfig path aliases (@/*) to on-demand-loaded source (Next.js/Expo style)",
+    async () => {
+      // `paths` is forwarded from tsconfig and its base falls back to the host's
+      // getCurrentDirectory() (= root), so "@/lib/posts" maps to <root>/lib/posts,
+      // which is then fetched on demand. Before the fix, `paths` was dropped from
+      // the compiler options entirely and the alias never resolved.
+      const root = srcFixtureRoot;
+      const file = `${root}/app.ts`;
+      const source =
+        'import { getPostBySlug } from "@/lib/posts";\nexport const p = getPostBySlug();\n';
+      const { diags, rounds, max } = await runLoop(
+        root,
+        file,
+        source,
+        JSON.stringify({ compilerOptions: { paths: { "@/*": ["./*"] } } }),
+      );
+      const messages = diags.map((d) => d.message).join("\n");
+      expect(messages).not.toMatch(/Cannot find module '@\/lib\/posts'/);
+      expect(rounds).toBeLessThan(max);
+    },
+    30_000,
+  );
+
+  it(
+    "monorepo: each package's @/* resolves to its OWN dir (no root tsconfig)",
+    async () => {
+      const root = monorepoRoot;
+      const tsconfigs = [
+        { dir: `${root}/pkg-a`, text: readFileSync(`${root}/pkg-a/tsconfig.json`, "utf8") },
+        { dir: `${root}/pkg-b`, text: readFileSync(`${root}/pkg-b/tsconfig.json`, "utf8") },
+      ];
+      // A file in pkg-a importing "@/thing" must resolve to pkg-a/thing.ts, and
+      // go-to-definition must land there — not in pkg-b, which has the same alias.
+      // The workspace root has no tsconfig (null), like the reported monorepo.
+      const file = `${root}/pkg-a/entry.ts`;
+      const source = 'import { which } from "@/thing";\nexport const w = which;\n';
+      const { diags, rounds, max } = await runLoop(root, file, source, null, tsconfigs);
+      const messages = diags.map((d) => d.message).join("\n");
+      expect(messages).not.toMatch(/Cannot find module '@\/thing'/);
+      expect(rounds).toBeLessThan(max);
+
+      const off = source.indexOf("which", source.indexOf('from "@/thing"') - 25);
+      const def = (await fake.request({ kind: "definition", path: file, offset: off })) as {
+        path: string;
+      } | null;
+      expect(def?.path).toBe(`${root}/pkg-a/thing.ts`);
+    },
+    30_000,
+  );
 });
 
 // ---- synthetic exports-map fixture (portable; no extra deps) ---------------
@@ -264,6 +341,42 @@ let fixtureRoot: string;
   );
   write(`${nm}/pkg-dep/dist/index.d.ts`, "export declare const deep: number;\n");
 }
+
+// ---- synthetic SOURCE fixture (no node_modules) ----------------------------
+// Real source files the worker must fetch ON DEMAND. openProject preloads only
+// the entry file; the imported siblings below are NEVER preloaded, so they can
+// only enter the VFS if the host lazily fetches non-node_modules paths under
+// root (the `wantable` change). Also exercises tsconfig `paths` (@/*) forwarding.
+let srcFixtureRoot: string;
+{
+  srcFixtureRoot = mkdtempSync(path.join(tmpdir(), "ts-worker-src-"));
+  const write = (p: string, c: string) => {
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, c);
+  };
+  write(`${srcFixtureRoot}/sibling.ts`, "export const hello = 1;\n");
+  write(`${srcFixtureRoot}/lib/posts.ts`, "export function getPostBySlug(): string { return 'x'; }\n");
+}
+
+// ---- synthetic MONOREPO fixture (two packages, each with its own @/* alias) --
+// Mirrors a workspace with NO root tsconfig where each package defines the same
+// `@/*` alias anchored to itself. Proves merged `paths` resolve per-package with
+// no cross-talk: pkg-a's `@/thing` finds pkg-a/thing, pkg-b's finds pkg-b/thing.
+let monorepoRoot: string;
+{
+  monorepoRoot = mkdtempSync(path.join(tmpdir(), "ts-worker-mono-"));
+  const write = (p: string, c: string) => {
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(p, c);
+  };
+  const aliasCfg = JSON.stringify({ compilerOptions: { paths: { "@/*": ["./*"] } } });
+  write(`${monorepoRoot}/pkg-a/tsconfig.json`, aliasCfg);
+  write(`${monorepoRoot}/pkg-a/thing.ts`, "export const which = 'A';\n");
+  write(`${monorepoRoot}/pkg-b/tsconfig.json`, aliasCfg);
+  write(`${monorepoRoot}/pkg-b/thing.ts`, "export const which = 'B';\n");
+}
 afterAll(() => {
   rmSync(fixtureRoot, { recursive: true, force: true });
+  rmSync(srcFixtureRoot, { recursive: true, force: true });
+  rmSync(monorepoRoot, { recursive: true, force: true });
 });

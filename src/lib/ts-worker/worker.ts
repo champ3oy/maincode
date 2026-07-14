@@ -3,6 +3,7 @@ import * as ts from "typescript";
 import { createRpc, type FileEntry, type WorkerRequest } from "./protocol";
 import {
   mapCompilerOptions,
+  mergeConfigPaths,
   scriptKindForPath,
   tsCompletionsToData,
   tsDiagnosticsToData,
@@ -45,6 +46,19 @@ function want(path: string) {
   if (!files.has(path) && !missing.has(path) && !pending.has(path)) wanted.add(path);
 }
 
+// Which absent paths may we fetch on demand? node_modules (types/deps) AND the
+// user's own source under `root`. The initial preload is only an optimization /
+// first-paint: it's capped (client PRELOAD_CAP) and, on native projects, the
+// directory walk's file cap can be exhausted by build dirs (ios/, android/,
+// Pods/) before it reaches src — so many source files never make the preload.
+// Since TS probes any path it needs to resolve an import, un-preloaded source
+// must be fetchable here too, or aliased/relative imports to it ("@/components/…")
+// resolve to nothing and stay "Cannot find module" forever. Guarding on `root`
+// keeps probes scoped to the project (and excludes the /__tslibs default libs).
+function wantable(p: string): boolean {
+  return p.includes("/node_modules/") || (root !== "" && p.startsWith(root + "/"));
+}
+
 // ---- host ------------------------------------------------------------------
 // `hasInvalidatedResolutions` isn't on the public LanguageServiceHost type (it lives
 // on CompilerHost/ProgramHost), but the LanguageService reads it at runtime to decide
@@ -56,19 +70,19 @@ const host: ts.LanguageServiceHost & Pick<ts.CompilerHost, "hasInvalidatedResolu
   getScriptSnapshot: (p) => {
     const f = files.get(p);
     if (f) return ts.ScriptSnapshot.fromString(f.text);
-    if (p.includes("/node_modules/")) want(p);
+    if (wantable(p)) want(p);
     return undefined;
   },
   readFile: (p) => {
     const f = files.get(p);
     if (f) return f.text;
-    if (p.includes("/node_modules/")) want(p);
+    if (wantable(p)) want(p);
     return undefined;
   },
   fileExists: (p) => {
     if (files.has(p)) return true;
     if (missing.has(p)) return false;
-    if (p.includes("/node_modules/")) want(p);
+    if (wantable(p)) want(p);
     return false;
   },
   directoryExists: (d) =>
@@ -105,6 +119,25 @@ function flushWanted() {
   rpc.notify({ kind: "needFiles", paths });
 }
 
+// TS can throw from inside a LanguageService query while the VFS is still
+// churning: as lazily-arriving node_modules package.json manifests flip a file's
+// impliedNodeFormat (CommonJS ↔ ESM), the document registry's release key stops
+// matching on the next createProgram and `releaseOldSourceFile` dereferences an
+// undefined entry ("Cannot read properties of undefined (reading 'sourceFile')").
+// That throw would reject the RPC, which the client treats as a FATAL worker
+// error and responds to by closeProject() — tearing down completions, hover,
+// diagnostics AND go-to-definition for the whole project (observed on large RN
+// monorepos). Run every query behind this guard so a transient throw degrades to
+// an empty result and the worker survives; the next query rebuilds against the
+// now-larger / settled VFS and succeeds.
+function guard<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn();
+  } catch {
+    return fallback;
+  }
+}
+
 // ---- offset → line/column mapping (go-to-definition) ------------------------
 // Convert a 0-based character offset in `fileName` to a 1-based {line, column} for
 // CodeMirror. Uses ts.getLineAndCharacterOfPosition (0-based line/char) on the target
@@ -137,7 +170,13 @@ async function handle(req: WorkerRequest): Promise<unknown> {
       pending.clear();
       wanted = new Set();
       projectVersion = 0;
-      options = mapCompilerOptions(req.tsconfigText, ts);
+      options = mapCompilerOptions(req.tsconfigText, ts, req.root);
+      // Monorepo-aware alias resolution: merge `paths` from every discovered
+      // tsconfig (each rebased to absolute against its own dir) so per-package
+      // aliases resolve even when the workspace root has no tsconfig. Supersedes
+      // the single root config's paths when any were discovered.
+      const mergedPaths = mergeConfigPaths(req.tsconfigs ?? [], ts);
+      if (mergedPaths) options.paths = mergedPaths;
       // load default libs into the VFS
       await Promise.all(
         Object.entries(libLoaders).map(async ([path, load]) => {
@@ -163,12 +202,16 @@ async function handle(req: WorkerRequest): Promise<unknown> {
     }
     case "completions": {
       if (!service) return { items: [], fromOffset: req.offset };
-      const info = service.getCompletionsAtPosition(req.path, req.offset, {
-        includeCompletionsForModuleExports: true,
-        includeCompletionsWithInsertText: true,
-        includeCompletionsWithSnippetText: false,
-        allowIncompleteCompletions: true,
-      });
+      const info = guard(
+        () =>
+          service!.getCompletionsAtPosition(req.path, req.offset, {
+            includeCompletionsForModuleExports: true,
+            includeCompletionsWithInsertText: true,
+            includeCompletionsWithSnippetText: false,
+            allowIncompleteCompletions: true,
+          }),
+        undefined,
+      );
       flushWanted();
       const fromOffset = info?.optionalReplacementSpan
         ? info.optionalReplacementSpan.start
@@ -177,14 +220,18 @@ async function handle(req: WorkerRequest): Promise<unknown> {
     }
     case "completionDetails": {
       if (!service) return { extraChanges: [] };
-      const details = service.getCompletionEntryDetails(
-        req.path,
-        req.offset,
-        req.entryName,
+      const details = guard(
+        () =>
+          service!.getCompletionEntryDetails(
+            req.path,
+            req.offset,
+            req.entryName,
+            undefined,
+            req.source,
+            undefined,
+            req.data as ts.CompletionEntryData | undefined,
+          ),
         undefined,
-        req.source,
-        undefined,
-        req.data as ts.CompletionEntryData | undefined,
       );
       flushWanted();
       const extraChanges: { from: number; to: number; insert: string }[] = [];
@@ -205,16 +252,19 @@ async function handle(req: WorkerRequest): Promise<unknown> {
     case "diagnostics": {
       if (!service || !files.has(req.path)) return [];
       const text = files.get(req.path)!.text;
-      const all = [
-        ...service.getSyntacticDiagnostics(req.path),
-        ...service.getSemanticDiagnostics(req.path),
-      ];
+      const all = guard(
+        () => [
+          ...service!.getSyntacticDiagnostics(req.path),
+          ...service!.getSemanticDiagnostics(req.path),
+        ],
+        [] as ts.Diagnostic[],
+      );
       flushWanted();
       return tsDiagnosticsToData(all, text, ts);
     }
     case "hover": {
       if (!service) return null;
-      const info = service.getQuickInfoAtPosition(req.path, req.offset);
+      const info = guard(() => service!.getQuickInfoAtPosition(req.path, req.offset), undefined);
       flushWanted();
       if (!info) return null;
       return {
@@ -228,7 +278,7 @@ async function handle(req: WorkerRequest): Promise<unknown> {
     }
     case "definition": {
       if (!service) return null;
-      const defs = service.getDefinitionAtPosition(req.path, req.offset);
+      const defs = guard(() => service!.getDefinitionAtPosition(req.path, req.offset), undefined);
       // flushWanted like the other handlers so any node_modules probes triggered
       // while resolving the definition are surfaced to the client for loading.
       flushWanted();
