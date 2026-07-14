@@ -82,4 +82,32 @@ describe("LspClient", () => {
     });
     expect(await p).toEqual({ path: "/repo/b.ts", line: 5, column: 3 });
   });
+
+  it("splits hover markdown: leading code fence → signature, rest → documentation", async () => {
+    const fake = makeFake();
+    const c = client(fake);
+    await c.openProject("/repo");
+    c.notifyDocOpened("/repo/a.ts", "const x = 1;\n");
+    const p = c.getHover("/repo/a.ts", 6);
+    await Promise.resolve();
+    const req = fake.sent.find((m) => m.method === "textDocument/hover");
+    fake.push({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: {
+        contents: {
+          kind: "markdown",
+          value: "```typescript\nconst x: number\n```\nA number.\n\n*@example*\n```ts\nx + 1\n```",
+        },
+      },
+    });
+    const hover = await p;
+    // Leading ```typescript block becomes the (raw, monospace) signature; the
+    // rest stays markdown so renderMarkdown formats the prose + @example fence.
+    expect(hover?.signature).toEqual([{ text: "const x: number", kind: "text" }]);
+    expect(hover?.documentation).toContain("A number.");
+    expect(hover?.documentation).toContain("*@example*");
+    expect(hover?.documentation).toContain("```ts");
+    expect(hover?.documentation).not.toContain("const x: number"); // signature was extracted
+  });
 });

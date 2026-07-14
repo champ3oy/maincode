@@ -121,7 +121,11 @@ export class LspClient implements IntelligenceClient {
     if (!res || !res.contents) return null;
     const md = hoverToMarkdown(res.contents);
     if (!md) return null;
-    return { signature: [{ text: md, kind: "text" }], documentation: "", tags: [] };
+    // LSP hover is a single markdown string that (for TS) leads with a ```ts
+    // fenced type signature, then prose docs. Split so the signature renders in
+    // the monospace signature block and the rest flows through the markdown
+    // renderer (code blocks, @example, italics) instead of showing raw fences.
+    return splitHoverMarkdown(md);
   }
 
   async getDefinition(path: string, offset: number): Promise<DefinitionResult | null> {
@@ -233,4 +237,20 @@ function hoverToMarkdown(contents: LspHover["contents"]): string {
   if (typeof contents === "string") return contents;
   if (Array.isArray(contents)) return contents.map((c) => (typeof c === "string" ? c : c.value)).join("\n\n");
   return (contents as { value: string }).value ?? "";
+}
+
+/**
+ * Split LSP hover markdown into a signature + documentation `HoverResult`. If the
+ * markdown leads with a fenced code block (the type signature, which is how
+ * tsserver formats it), that block's body becomes the signature and the rest
+ * becomes markdown documentation. Otherwise it all goes to documentation.
+ */
+function splitHoverMarkdown(md: string): HoverResult {
+  const m = /^\s*```[^\n]*\n([\s\S]*?)\n?```\s*/.exec(md);
+  if (m) {
+    const sig = m[1].trim();
+    const rest = md.slice(m[0].length).trim();
+    return { signature: [{ text: sig, kind: "text" }], documentation: rest, tags: [] };
+  }
+  return { signature: [], documentation: md.trim(), tags: [] };
 }

@@ -17,11 +17,14 @@ export function renderHover(info: HoverResult): HTMLElement {
   const dom = document.createElement("div");
   dom.className = "cm-ts-hover";
 
-  dom.appendChild(renderSignature(info.signature));
+  const hasSig = info.signature.length > 0;
+  if (hasSig) dom.appendChild(renderSignature(info.signature));
 
   const hasDocs = info.documentation.trim().length > 0;
   const hasTags = info.tags.length > 0;
-  if (hasDocs || hasTags) {
+  // Only divide when there's a signature above to divide FROM (LSP hovers with
+  // no leading code block have an empty signature and shouldn't show a rule).
+  if (hasSig && (hasDocs || hasTags)) {
     const hr = document.createElement("hr");
     hr.className = "cm-ts-hover-divider";
     dom.appendChild(hr);
