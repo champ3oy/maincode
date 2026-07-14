@@ -117,7 +117,7 @@ export function CodeEditor({
   const langCompartment = useRef(new Compartment());
   const { resolvedTheme } = useTheme();
   const { settings } = useSettings();
-  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript, engine } = settings.editor;
+  const { fontSize, fontFamily: fontFamilyChoice, tabSize, wordWrap, autocomplete, linting, typescript } = settings.editor;
   const fontFamily = FONT_STACKS[fontFamilyChoice];
 
   const onChangeRef = useRef(onChange);
@@ -155,11 +155,8 @@ export function CodeEditor({
   const typescriptRef = useRef(typescript);
   typescriptRef.current = typescript;
 
-  const engineRef = useRef(engine);
-  engineRef.current = engine;
-  // Stable getter so extension closures always resolve the CURRENT engine's
-  // client without needing to be rebuilt when the setting changes.
-  const getClient = useRef(() => intelligenceClient(engineRef.current));
+  // Stable getter so extension closures resolve the intelligence client lazily.
+  const getClient = useRef(() => intelligenceClient());
 
   const onGoToDefinitionRef = useRef(onGoToDefinition);
   onGoToDefinitionRef.current = onGoToDefinition;

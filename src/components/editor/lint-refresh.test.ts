@@ -50,7 +50,7 @@ function makeLintExtension(holder: { diags: Diagnostic[] }) {
     lintGutter(),
     linter(
       async () => {
-        // async, like tsClient().getDiagnostics(path)
+        // async, like the intelligence client's getDiagnostics(path)
         await Promise.resolve();
         return holder.diags;
       },

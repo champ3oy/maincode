@@ -1,19 +1,15 @@
-// protocol.ts - Types and RPC helper for TypeScript worker communication
-
-export interface FileEntry {
-  path: string;
-  content: string | null; // null = does not exist
-}
+// Shared result types for the editor's TypeScript/JS intelligence, produced by
+// the LSP client and consumed by the CodeMirror extensions + hover renderer.
+// Offsets are UTF-16 document offsets (CodeMirror convention).
 
 export interface CompletionItemData {
   label: string;
-  kind: string; // ts.ScriptElementKind string, e.g. "var", "method", "keyword"
+  kind: string; // ts.ScriptElementKind-style string, e.g. "var", "method", "keyword"
   detail?: string; // e.g. source module for auto-imports: "react"
   sortText: string;
   insertText?: string;
-  // present when the entry is an auto-import candidate (needs details to apply)
-  source?: string;
-  data?: unknown; // ts.CompletionEntryData, passed back opaquely
+  source?: string; // present when the entry needs details to apply (auto-import)
+  data?: unknown; // opaque, passed back for completion resolve
 }
 
 export interface CompletionsResult {
@@ -35,95 +31,19 @@ export interface DiagnosticData {
 
 export interface HoverPart {
   text: string;
-  kind: string; // ts SymbolDisplayPart.kind, e.g. "keyword", "functionName", "punctuation"
+  kind: string; // display-part kind for coloring; "code" → syntax-highlight the text
 }
 
 export interface HoverResult {
-  signature: HoverPart[]; // info.displayParts, structured (for syntax coloring)
-  documentation: string; // FULL markdown (info.documentation flattened) — may be ""
-  tags: { name: string; text: string }[]; // JSDoc tags: @example/@param/@returns/etc.
+  signature: HoverPart[]; // the type signature, structured for rendering
+  documentation: string; // markdown docs (may be "")
+  tags: { name: string; text: string }[]; // JSDoc tags: @example/@param/@returns/…
 }
 
 // Go-to-definition target. line/column are 1-based (CodeMirror convention),
-// mapped in the worker from TS's 0-based offset via the target source file's
-// line map. `path` is the target file's real absolute path — may point under
-// node_modules (a .d.ts); those files exist on disk and the editor can open them.
+// `path` is the target file's absolute path (may point under node_modules).
 export interface DefinitionResult {
   path: string;
   line: number;
   column: number;
-}
-
-export type WorkerRequest =
-  | {
-      kind: "openProject";
-      root: string;
-      files: { path: string; content: string }[];
-      tsconfigText: string | null;
-      // All tsconfig/jsconfig files discovered in the workspace, each with its
-      // directory. Their `paths` are merged (rebased to absolute) so aliases like
-      // `@/*` resolve per-sub-package in a monorepo — where each package has its
-      // own tsconfig and there may be no config at the workspace root. Optional
-      // for back-compat: when absent, only tsconfigText's paths apply.
-      tsconfigs?: { dir: string; text: string }[];
-    }
-  | { kind: "docChanged"; path: string; content: string; version: number }
-  | { kind: "completions"; path: string; offset: number }
-  | { kind: "completionDetails"; path: string; offset: number; entryName: string; source?: string; data?: unknown }
-  | { kind: "diagnostics"; path: string }
-  | { kind: "hover"; path: string; offset: number }
-  | { kind: "definition"; path: string; offset: number }
-  | { kind: "filesLoaded"; files: FileEntry[] };
-
-export type WorkerNotification =
-  | { kind: "needFiles"; paths: string[] }
-  | { kind: "typesUpdated" }; // node_modules types arrived → clients should re-query
-
-export type RpcPort = {
-  postMessage(msg: unknown): void;
-  addEventListener(type: "message", fn: (e: MessageEvent) => void): void;
-};
-
-// Envelope: { id?: number, t: "req" | "res" | "err" | "notify", p: unknown }
-export function createRpc(
-  port: RpcPort,
-  onRequest: (payload: unknown) => Promise<unknown> | unknown,
-  onNotify?: (payload: unknown) => void,
-) {
-  let nextId = 1;
-  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
-
-  port.addEventListener("message", (e) => {
-    const msg = e.data as { id?: number; t: string; p: unknown };
-    if (!msg || typeof msg.t !== "string") return;
-    if (msg.t === "req") {
-      Promise.resolve()
-        .then(() => onRequest(msg.p))
-        .then(
-          (result) => port.postMessage({ id: msg.id, t: "res", p: result }),
-          (err) => port.postMessage({ id: msg.id, t: "err", p: err instanceof Error ? err.message : String(err) }),
-        );
-    } else if (msg.t === "res" || msg.t === "err") {
-      const entry = msg.id !== undefined ? pending.get(msg.id) : undefined;
-      if (!entry) return;
-      pending.delete(msg.id!);
-      if (msg.t === "res") entry.resolve(msg.p);
-      else entry.reject(new Error(String(msg.p)));
-    } else if (msg.t === "notify") {
-      onNotify?.(msg.p);
-    }
-  });
-
-  return {
-    request(payload: unknown): Promise<unknown> {
-      const id = nextId++;
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
-        port.postMessage({ id, t: "req", p: payload });
-      });
-    },
-    notify(payload: unknown): void {
-      port.postMessage({ t: "notify", p: payload });
-    },
-  };
 }

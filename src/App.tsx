@@ -94,13 +94,11 @@ function App() {
   // workspace (worker is lazy; LSP dials out to the language server).
   useEffect(() => {
     if (rootPath && settings.editor.typescript) {
-      void intelligenceClient(settings.editor.engine)
-        .openProject(rootPath)
-        .catch(() => {});
+      void intelligenceClient().openProject(rootPath).catch(() => {});
     } else {
-      intelligenceClient(settings.editor.engine).closeProject();
+      intelligenceClient().closeProject();
     }
-  }, [rootPath, settings.editor.typescript, settings.editor.engine]);
+  }, [rootPath, settings.editor.typescript]);
 
   function clampFontSize(size: number): number {
     return Math.min(32, Math.max(8, Math.round(size)));

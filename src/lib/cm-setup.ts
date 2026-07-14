@@ -112,8 +112,8 @@ export const baseSetup: Extension = (() => [
  * When `ts` is provided, the TS completion source is added alongside
  * `completeAnyWord`. TS results are boosted so they rank first; word
  * completions remain the warm-up fallback. The TS source self-gates on
- * `isTsWorkerPath` and `tsClient().ready()` so it can be registered
- * unconditionally.
+ * `isTsWorkerPath` and the intelligence client's `ready()` so it can be
+ * registered unconditionally.
  */
 export function completionExtensions(
   enabled: boolean,

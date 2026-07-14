@@ -7,19 +7,18 @@ import type {
   HoverResult,
 } from "./ts-worker/protocol";
 import { LspClient } from "./lsp/client";
-import { tsClient } from "./ts-worker/client";
 
-/** The contract both the in-browser worker and the LSP client implement, so the
- *  CodeMirror layer is engine-agnostic. Offsets are UTF-16 doc offsets. */
+/** The contract the LSP client implements and the CodeMirror layer consumes.
+ *  Offsets are UTF-16 doc offsets. */
 export interface IntelligenceClient {
   openProject(root: string): Promise<void>;
   closeProject(): void;
   ready(): boolean;
-  /** File became visible in the editor (LSP didOpen; worker: load into VFS). */
+  /** File became visible in the editor → LSP textDocument/didOpen. */
   notifyDocOpened(path: string, content: string): void;
-  /** File content changed (LSP didChange; worker: docChanged). */
+  /** File content changed → LSP textDocument/didChange. */
   notifyDocChanged(path: string, content: string): void;
-  /** File/tab closed (LSP didClose; worker: no-op). */
+  /** File/tab closed → LSP textDocument/didClose. */
   notifyDocClosed(path: string): void;
   getCompletions(path: string, offset: number): Promise<CompletionsResult | null>;
   getCompletionDetails(
@@ -36,11 +35,9 @@ export interface IntelligenceClient {
 
 let lspSingleton: LspClient | null = null;
 
-/** Returns the active intelligence engine for the current setting. */
-export function intelligenceClient(engine: "worker" | "lsp"): IntelligenceClient {
-  if (engine === "lsp") {
-    if (!lspSingleton) lspSingleton = new LspClient();
-    return lspSingleton;
-  }
-  return tsClient();
+/** The editor's TypeScript/JS intelligence engine — the bundled tsserver over
+ *  LSP, as a lazily-created singleton. */
+export function intelligenceClient(): IntelligenceClient {
+  if (!lspSingleton) lspSingleton = new LspClient();
+  return lspSingleton;
 }
