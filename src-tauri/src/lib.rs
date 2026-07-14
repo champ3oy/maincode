@@ -3,6 +3,7 @@ mod menu;
 mod watcher;
 mod fs_ops;
 mod pty;
+mod lsp;
 mod settings;
 #[cfg(target_os = "macos")]
 mod dock_menu;
