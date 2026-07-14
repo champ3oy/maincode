@@ -75,6 +75,10 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
             let cli = resource(app, "lsp/server/node_modules/pyright/langserver.index.js")?;
             Ok((node, vec![cli.to_string_lossy().into(), "--stdio".into()]))
         }
+        "rust" => {
+            let bin = cache_dir()?.join("rust").join("rust-analyzer");
+            Ok((bin, vec![]))
+        }
         _ => Err(format!("unknown language server: {server_id}")),
     }
 }
@@ -97,6 +101,25 @@ fn cache_dir() -> Result<std::path::PathBuf, String> {
     Ok(std::path::PathBuf::from(home).join(".config").join("maincode").join("servers"))
 }
 
+/// Download-and-cache a single-binary server distributed as a gzipped release
+/// asset on GitHub. Returns early if the binary is already cached. Emits
+/// `lsp-install-<server_id>` progress events for download/extract/done.
+fn ensure_github_gz(app: &AppHandle, server_id: &str, bin_name: &str, url: &str) -> Result<(), String> {
+    let dir = cache_dir()?.join(server_id);
+    let bin = dir.join(bin_name);
+    if bin.exists() {
+        return Ok(());
+    }
+    let _ = app.emit(&format!("lsp-install-{server_id}"), serde_json::json!({ "phase": "download" }));
+    let tmp = dir.join("download.gz");
+    crate::server_acquire::download(url, &tmp)?;
+    let _ = app.emit(&format!("lsp-install-{server_id}"), serde_json::json!({ "phase": "extract" }));
+    crate::server_acquire::extract_gz(&tmp, &bin)?;
+    let _ = std::fs::remove_file(&tmp);
+    let _ = app.emit(&format!("lsp-install-{server_id}"), serde_json::json!({ "phase": "done" }));
+    Ok(())
+}
+
 /// Per-server acquisition. Bundled servers are no-ops; download/go-install
 /// servers are added in later tasks. Emits `lsp-install-<id>` progress events.
 #[tauri::command]
@@ -104,6 +127,15 @@ pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String
     match server_id.as_str() {
         // Bundled (node-based): nothing to acquire.
         "typescript" | "python" => Ok(()),
+        "rust" => ensure_github_gz(
+            &app,
+            "rust",
+            "rust-analyzer",
+            &format!(
+                "https://github.com/rust-lang/rust-analyzer/releases/download/2025-06-30/rust-analyzer-{}-apple-darwin.gz",
+                std::env::consts::ARCH // "aarch64" | "x86_64"
+            ),
+        ),
         _ => Err(format!("no acquire strategy for {server_id}")),
     }
 }
