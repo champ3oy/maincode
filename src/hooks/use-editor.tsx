@@ -31,6 +31,7 @@ interface EditorContextValue {
   saveFile: (path: string) => Promise<void>;
   formatFile: (path: string) => Promise<void>;
   closeTab: (path: string) => void;
+  closeAllTabs: () => void;
   activateTab: (path: string) => void;
   handlePathRenamed: (from: string, to: string) => void;
   isDirty: (tab: EditorTab) => boolean;
@@ -180,6 +181,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "close", path });
   }, []);
 
+  const closeAllTabs = useCallback(() => {
+    dispatch({ type: "reset" });
+  }, []);
+
   const activateTab = useCallback((path: string) => {
     dispatch({ type: "activate", path });
   }, []);
@@ -200,6 +205,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
       saveFile,
       formatFile,
       closeTab,
+      closeAllTabs,
       activateTab,
       handlePathRenamed,
       isDirty,
@@ -213,6 +219,7 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     saveFile,
     formatFile,
     closeTab,
+    closeAllTabs,
     activateTab,
     handlePathRenamed,
     setFormatRoot,

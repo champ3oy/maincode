@@ -16,7 +16,8 @@ export type TabsAction =
   | { type: "edit"; path: string; content: string }
   | { type: "markSaved"; path: string }
   | { type: "close"; path: string }
-  | { type: "renamePath"; from: string; to: string; name: string };
+  | { type: "renamePath"; from: string; to: string; name: string }
+  | { type: "reset" };
 
 export const initialTabsState: TabsState = { tabs: [], activePath: null };
 
@@ -76,5 +77,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         state.activePath === action.from ? action.to : state.activePath;
       return { tabs, activePath };
     }
+    case "reset":
+      return initialTabsState;
   }
 }

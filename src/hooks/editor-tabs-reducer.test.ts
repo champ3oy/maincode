@@ -71,3 +71,16 @@ describe("tabsReducer", () => {
     expect(s.activePath).toBe("/dir/b.ts");
   });
 });
+
+describe("tabsReducer reset", () => {
+  it("clears all tabs and the active path", () => {
+    const populated: TabsState = {
+      tabs: [
+        { path: "/a.ts", name: "a.ts", content: "x", savedContent: "x" },
+        { path: "/b.ts", name: "b.ts", content: "y", savedContent: "z" },
+      ],
+      activePath: "/b.ts",
+    };
+    expect(tabsReducer(populated, { type: "reset" })).toEqual(initialTabsState);
+  });
+});
