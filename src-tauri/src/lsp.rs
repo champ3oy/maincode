@@ -79,6 +79,10 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
             let bin = cache_dir()?.join("rust").join("rust-analyzer");
             Ok((bin, vec![]))
         }
+        "cpp" => {
+            let bin = cache_dir()?.join("cpp").join("clangd_18.1.3").join("bin").join("clangd");
+            Ok((bin, vec![]))
+        }
         _ => Err(format!("unknown language server: {server_id}")),
     }
 }
@@ -136,6 +140,24 @@ pub fn lsp_ensure_server(server_id: String, app: AppHandle) -> Result<(), String
                 std::env::consts::ARCH // "aarch64" | "x86_64"
             ),
         ),
+        "cpp" => {
+            let dir = cache_dir()?.join("cpp");
+            let bin = dir.join("clangd_18.1.3").join("bin").join("clangd");
+            if bin.exists() {
+                return Ok(());
+            }
+            let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "download" }));
+            let tmp = dir.join("clangd.zip");
+            crate::server_acquire::download(
+                "https://github.com/clangd/clangd/releases/download/18.1.3/clangd-mac-18.1.3.zip",
+                &tmp,
+            )?;
+            let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "extract" }));
+            crate::server_acquire::extract_zip(&tmp, &dir)?;
+            let _ = std::fs::remove_file(&tmp);
+            let _ = app.emit("lsp-install-cpp", serde_json::json!({ "phase": "done" }));
+            Ok(())
+        }
         _ => Err(format!("no acquire strategy for {server_id}")),
     }
 }
