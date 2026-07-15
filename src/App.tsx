@@ -196,6 +196,12 @@ function App() {
   // display:none (the `hidden` class) so shells/scrollback/splits and the
   // xterm DOM survive — no unmount, no re-parent, no glitch.
   const [terminalMounted, setTerminalMounted] = useState(false);
+  // An AI-CLI launch requested while the terminal dock wasn't mounted yet; run
+  // it once the dock mounts and its ref attaches (see the effect below).
+  const [pendingLaunch, setPendingLaunch] = useState<{
+    bin: string;
+    label: string;
+  } | null>(null);
   const TERM_DEFAULT_BOTTOM = 260; // px height
   const TERM_DEFAULT_RIGHT = 420; // px width
   const [terminalSize, setTerminalSize] = useState(TERM_DEFAULT_BOTTOM);
@@ -204,6 +210,19 @@ function App() {
     setTerminalMounted(true);
     setShowTerminal((v) => !v);
   }, []);
+
+  // Run a pending AI-CLI launch once the terminal dock has mounted. A child's
+  // imperative ref (useImperativeHandle) attaches before this parent effect
+  // runs, so terminalDockRef is live here even on the mounting render.
+  useEffect(() => {
+    if (pendingLaunch && terminalMounted && terminalDockRef.current) {
+      terminalDockRef.current.openTerminalWithCommand(
+        pendingLaunch.bin,
+        pendingLaunch.label,
+      );
+      setPendingLaunch(null);
+    }
+  }, [pendingLaunch, terminalMounted]);
 
   const toggleTerminalPosition = useCallback(() => {
     setTerminalPosition((p) => {
@@ -769,11 +788,15 @@ function App() {
           showTerminal={showTerminal}
           onToggleTerminal={toggleTerminal}
           onLaunchAiCli={(cli) => {
+            setTerminalMounted(true);
             setShowTerminal(true);
-            terminalDockRef.current?.openTerminalWithCommand(
-              cli.bin,
-              cli.label,
-            );
+            if (terminalDockRef.current) {
+              terminalDockRef.current.openTerminalWithCommand(cli.bin, cli.label);
+            } else {
+              // Terminal wasn't mounted yet — run it once the dock mounts (its
+              // ref attaches after this render). See the pendingLaunch effect.
+              setPendingLaunch({ bin: cli.bin, label: cli.label });
+            }
           }}
         />
         <ResizablePanelGroup
