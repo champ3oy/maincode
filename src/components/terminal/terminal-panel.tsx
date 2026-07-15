@@ -8,9 +8,11 @@ import { useSettings } from "@/hooks/use-settings";
 
 interface TerminalPanelProps {
   cwd: string;
+  active: boolean;
+  command?: string;
 }
 
-export function TerminalPanel({ cwd }: TerminalPanelProps) {
+export function TerminalPanel({ cwd, active, command }: TerminalPanelProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const { settings } = useSettings();
   const { fontSize } = settings.terminal;
@@ -65,6 +67,12 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
         ptyIdRef.current = ptyId;
         unlistenOut = unOut;
         unlistenExit = unExit;
+        if (command) {
+          // Let the login shell print its prompt, then run the command.
+          setTimeout(() => {
+            void invoke("pty_write", { id: ptyId, data: `${command}\n` });
+          }, 300);
+        }
       })
       .catch((e) => term.write(`\r\nfailed to start shell: ${e}\r\n`));
 
@@ -106,6 +114,19 @@ export function TerminalPanel({ cwd }: TerminalPanelProps) {
       void invoke("pty_resize", { id: ptyId, cols: term.cols, rows: term.rows });
     }
   }, [fontSize]);
+
+  // Refit when this tab becomes visible (xterm can't measure a hidden element).
+  useEffect(() => {
+    if (!active) return;
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    fit.fit();
+    const ptyId = ptyIdRef.current;
+    if (ptyId !== null) {
+      void invoke("pty_resize", { id: ptyId, cols: term.cols, rows: term.rows });
+    }
+  }, [active]);
 
   return <div ref={hostRef} className="h-full w-full px-2 pt-1" />;
 }

@@ -30,6 +30,14 @@ entries under a new version heading.
   shell, Dockerfile, XML, SQL, Java, Kotlin, C#, Swift, Ruby, Lua, diff, and
   more (including extension-less files like `Dockerfile` and dotfiles like
   `.bashrc`).
+- Terminal: **tabs** — multiple terminals now live in a tab strip instead of
+  split panes, and it works whether the terminal is docked at the bottom or the
+  side. Switching tabs keeps each shell and its scrollback alive.
+- **In-app auto-update** — a top-right indicator checks GitHub for new releases;
+  when one is available, one click downloads it, installs it, and relaunches.
+- Titlebar: **AI CLI launcher** — a dropdown lists the AI coding CLIs you have
+  installed (Claude Code, OpenCode, Gemini, Aider, Codex, Cursor, Antigravity)
+  and opens the one you pick in a new terminal tab.
 
 ### Changed
 - The TypeScript engine moved from an in-app compiler worker to the real
@@ -50,6 +58,10 @@ entries under a new version heading.
   diagnostics bleed), and closing a window stops exactly its own servers.
 - Rapidly switching projects while a language server was still starting no
   longer leaks the server process.
+- Opening a different project now clears the previous project's editor tabs and
+  terminal sessions instead of leaving them behind.
+- Triggering **Open Folder** (menu / ⌘O) no longer pops the dialog in every
+  open window — only the focused one.
 
 ## [0.1.2] — 2026-07-13
 

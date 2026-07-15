@@ -56,7 +56,10 @@ import {
   CommandCenter,
   type PaletteCommand,
 } from "@/components/command-center/command-center";
-import { TerminalDock } from "@/components/terminal/terminal-dock";
+import {
+  TerminalDock,
+  type TerminalDockHandle,
+} from "@/components/terminal/terminal-dock";
 import { setProjectRoot, warmServer } from "@/lib/intelligence";
 import { invoke } from "@tauri-apps/api/core";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
@@ -67,6 +70,7 @@ function App() {
   const {
     openFile,
     closeTab,
+    closeAllTabs,
     handlePathRenamed,
     activeTab,
     saveFile,
@@ -90,6 +94,16 @@ function App() {
   useEffect(() => {
     setFormatRoot(rootPath);
   }, [rootPath, setFormatRoot]);
+
+  // Opening a different project must not carry the previous project's tabs.
+  // Skip the initial mount (nothing to clear) and same-path re-selection.
+  const prevRootRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevRootRef.current !== null && prevRootRef.current !== rootPath) {
+      closeAllTabs();
+    }
+    prevRootRef.current = rootPath;
+  }, [rootPath, closeAllTabs]);
 
   // Set (or clear) the project root on the client manager so per-language LSP
   // clients are lazily created/opened as files route to them. When the project
@@ -131,6 +145,7 @@ function App() {
   const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
   const restoreStartedRef = useRef(false);
+  const terminalDockRef = useRef<TerminalDockHandle | null>(null);
 
   // Source control panel state
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("files");
@@ -181,6 +196,12 @@ function App() {
   // display:none (the `hidden` class) so shells/scrollback/splits and the
   // xterm DOM survive — no unmount, no re-parent, no glitch.
   const [terminalMounted, setTerminalMounted] = useState(false);
+  // An AI-CLI launch requested while the terminal dock wasn't mounted yet; run
+  // it once the dock mounts and its ref attaches (see the effect below).
+  const [pendingLaunch, setPendingLaunch] = useState<{
+    bin: string;
+    label: string;
+  } | null>(null);
   const TERM_DEFAULT_BOTTOM = 260; // px height
   const TERM_DEFAULT_RIGHT = 420; // px width
   const [terminalSize, setTerminalSize] = useState(TERM_DEFAULT_BOTTOM);
@@ -189,6 +210,19 @@ function App() {
     setTerminalMounted(true);
     setShowTerminal((v) => !v);
   }, []);
+
+  // Run a pending AI-CLI launch once the terminal dock has mounted. A child's
+  // imperative ref (useImperativeHandle) attaches before this parent effect
+  // runs, so terminalDockRef is live here even on the mounting render.
+  useEffect(() => {
+    if (pendingLaunch && terminalMounted && terminalDockRef.current) {
+      terminalDockRef.current.openTerminalWithCommand(
+        pendingLaunch.bin,
+        pendingLaunch.label,
+      );
+      setPendingLaunch(null);
+    }
+  }, [pendingLaunch, terminalMounted]);
 
   const toggleTerminalPosition = useCallback(() => {
     setTerminalPosition((p) => {
@@ -452,10 +486,12 @@ function App() {
   const menuActionRef = useRef(onMenuAction);
   menuActionRef.current = onMenuAction;
   useEffect(() => {
+    const myLabel = getCurrentWindow().label;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    listen<string>("menu-action", (e) => {
-      void menuActionRef.current(e.payload);
+    listen<{ action: string; target: string }>("menu-action", (e) => {
+      if (e.payload.target !== myLabel) return; // not addressed to this window
+      void menuActionRef.current(e.payload.action);
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -751,6 +787,17 @@ function App() {
           onSelectTab={setSidebarTab}
           showTerminal={showTerminal}
           onToggleTerminal={toggleTerminal}
+          onLaunchAiCli={(cli) => {
+            setTerminalMounted(true);
+            setShowTerminal(true);
+            if (terminalDockRef.current) {
+              terminalDockRef.current.openTerminalWithCommand(cli.bin, cli.label);
+            } else {
+              // Terminal wasn't mounted yet — run it once the dock mounts (its
+              // ref attaches after this render). See the pendingLaunch effect.
+              setPendingLaunch({ bin: cli.bin, label: cli.label });
+            }
+          }}
         />
         <ResizablePanelGroup
           orientation="horizontal"
@@ -930,6 +977,8 @@ function App() {
                     }
                   >
                     <TerminalDock
+                      key={rootPath ?? "no-project"}
+                      ref={terminalDockRef}
                       cwd={rootPath}
                       position={terminalPosition}
                       onTogglePosition={toggleTerminalPosition}

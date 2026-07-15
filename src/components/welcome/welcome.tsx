@@ -19,6 +19,12 @@ export function Welcome({ onOpenFolder }: WelcomeProps) {
   return (
     <main className="flex h-dvh flex-col items-center justify-center gap-6 bg-background">
       <div className="text-center">
+        <img
+          src="/logo.png"
+          alt="Maincode"
+          draggable={false}
+          className="mx-auto mb-4 size-16 select-none"
+        />
         <h1 className="text-2xl font-semibold">Maincode</h1>
         <p className="text-muted-foreground mt-1 text-sm">
           A simple code editor

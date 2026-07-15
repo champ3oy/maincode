@@ -1,77 +1,42 @@
-# Releasing Cub
+# Releasing maincode
 
-End-to-end recipe for cutting a new release that lands in Homebrew.
+Releases are built and uploaded manually.
 
-## Prerequisites (one-time)
+## Updater signing key (already set up)
 
-1. **Create a tap repo** on GitHub: `ephraimduncan/homebrew-cub`.
-   - Public, empty repo. No README required.
-   - Add a top-level `Casks/` directory.
-2. **Seed it** with the cask file from this repo:
-   ```bash
-   git clone git@github.com:ephraimduncan/homebrew-cub.git
-   cp Casks/cub.rb ../homebrew-cub/Casks/cub.rb
-   cd ../homebrew-cub && git add Casks/cub.rb && git commit -m "add cub cask" && git push
-   ```
-
-Once that exists, anyone can install Cub with:
-
-```bash
-brew install --cask ephraimduncan/cub/cub
+The updater keypair was generated with:
 ```
+npm run tauri signer generate -- --ci -w ~/.tauri/maincode.key
+```
+- **Private key:** `~/.tauri/maincode.key` — **no password**, kept OUTSIDE the
+  repo. **Back it up** (password manager / secure store). If it's lost, future
+  updates can't be signed and you'd have to ship a new pubkey (another manual
+  install for everyone).
+- **Public key:** committed to `plugins.updater.pubkey` in
+  `src-tauri/tauri.conf.json`. Do not change it without regenerating the pair.
+
+To rotate (e.g. to add a password), re-run the command above (add `-p <pw>`),
+paste the new public key into `tauri.conf.json`, and update the export below.
 
 ## Cutting a release
 
-1. **Bump the version** in three files (must match):
-   - `package.json` → `"version"`
-   - `src-tauri/Cargo.toml` → `version`
-   - `src-tauri/tauri.conf.json` → `"version"`
-2. Refresh `src-tauri/Cargo.lock`:
-   ```bash
-   (cd src-tauri && cargo update -p cub)
+1. Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `package.json`.
+2. Move the `CHANGELOG.md` **Unreleased** entries under the new version heading + date.
+3. Build with the updater signing key:
    ```
-3. Bump `version` in `Casks/cub.rb` (SHAs get replaced after CI publishes the artifacts; placeholder zeros are fine here).
-4. Commit on a release branch, open a PR, merge to `main`.
-5. **Tag and push** from `main`:
-   ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
+   export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/maincode.key)"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # no password on this key
+   npm run tauri build
    ```
-6. The `release` workflow fans out across two runners:
-   - `macos-14` → `Cub_<v>_aarch64.dmg` (Apple Silicon only — Intel macOS is not built)
-   - `ubuntu-22.04` → `Cub_<v>_amd64.deb`, `Cub_<v>_amd64.AppImage`, `Cub-<v>-1.x86_64.rpm`
-
-   Each job uploads to a single **draft** GitHub release and prints the SHA256 of every artifact as a workflow `::notice` (and stages them as `files.txt` in the job's working directory).
-7. Open the draft release, sanity-check the artifacts, then **publish**.
-8. **Update the cask** in `ephraimduncan/homebrew-cub`:
-   ```ruby
-   version "0.3.0"
-   sha256 "<aarch64 dmg sha>"
-   url "...Cub_#{version}_aarch64.dmg"
+   This produces the `.dmg`, the `.app.tar.gz`, and its `.sig` (from `createUpdaterArtifacts`).
+4. Create the GitHub release `vX.Y.Z`; upload the `.dmg` and the `.app.tar.gz`.
+5. Generate the update manifest and upload it as `latest.json` on the same release:
    ```
-   Commit & push.
+   node scripts/make-latest-json.mjs 0.1.3 \
+     src-tauri/target/release/bundle/macos/maincode.app.tar.gz.sig \
+     https://github.com/champ3oy/maincode/releases/download/v0.1.3/maincode.app.tar.gz \
+     "See the changelog." > latest.json
+   ```
+   (Adjust the `.sig` path/asset name to match the actual build output.)
 
-## Triggering a build without a tag
-
-The workflow accepts a `workflow_dispatch` input. Run it from the Actions tab with `tag: v0.3.0-rc1` to produce a draft release without touching `main`.
-
-## Local smoke build
-
-```bash
-# Apple Silicon
-CI=true bun run tauri build --target aarch64-apple-darwin --bundles dmg,app
-# → src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Cub_<v>_aarch64.dmg
-
-
-# Linux (requires the libwebkit2gtk/libgtk/libsoup/etc. dev packages — see
-# the workflow's "Install Linux build deps" step)
-CI=true bun run tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage,rpm
-```
-
-`CI=true` keeps the Tauri CLI from prompting.
-
-## Notes on signing
-
-The macOS binary is **ad-hoc signed only** — no Apple Developer ID, no notarization. The cask runs `xattr -dr com.apple.quarantine` in `postflight` so first launch isn't blocked by Gatekeeper. If you later get a Developer ID and notarize, drop that `postflight`.
-
-The Tauri updater plugin is still wired in but has a placeholder pubkey, so in-app updates are disabled. Users update via `brew upgrade --cask cub` (macOS) or by reinstalling the latest Linux artifact.
+**Version floor:** auto-update only works from a build that already includes the updater (0.1.3+). Users on 0.1.2 install 0.1.3 manually once.
