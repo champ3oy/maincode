@@ -8,6 +8,8 @@ entries under a new version heading.
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-07-15
+
 ### Added
 - Editor: **language intelligence for 14 languages** — real error squiggles, hover
   docs, completions, and ⌘-click go-to-definition now work for Python, Rust, Go,
