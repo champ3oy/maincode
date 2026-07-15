@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { IconFiles, IconGitBranch, IconTerminal2 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
 import { AiLauncher, type AiCli } from "./ai-launcher";
+import { UpdateIndicator } from "./update-indicator";
 
 export type SidebarTab = "files" | "changes";
 
@@ -33,6 +34,7 @@ export function TitleBar({
       className="flex h-9 shrink-0 select-none items-center border-b border-border bg-sidebar pr-2 pl-20"
     >
       <div className="ml-auto flex items-center gap-0.5">
+        <UpdateIndicator />
         <TabButton
           label="Files"
           active={activeTab === "files"}
