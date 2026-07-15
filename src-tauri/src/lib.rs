@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 
 static LAUNCH_PATH: OnceLock<PathBuf> = OnceLock::new();
+static LAST_FOCUSED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
 /// Record an initial folder path supplied on the command line. Called before
 /// Tauri is built so the frontend can pick it up on mount.
@@ -27,8 +28,15 @@ fn get_launch_path() -> Option<String> {
     LAUNCH_PATH.get().map(|p| p.to_string_lossy().to_string())
 }
 
-/// The label of the currently focused window, falling back to `main`.
+/// The label of the window that most recently held focus. Menu items are invoked
+/// from the app menu bar (which steals key focus), so a live `is_focused()` query
+/// at event time is unreliable — we track focus-gained instead.
 fn focused_window_label(app: &tauri::AppHandle) -> String {
+    if let Ok(lf) = LAST_FOCUSED.lock() {
+        if let Some(label) = lf.clone() {
+            return label;
+        }
+    }
     app.webview_windows()
         .into_iter()
         .find(|(_, w)| w.is_focused().unwrap_or(false))
@@ -57,12 +65,19 @@ pub fn run() {
                 }
                 return;
             }
-            // Forward every other custom action to the focused window only, so
-            // Save / New File / Toggle Terminal act on the active window.
+            // Forward every other custom action to the last-focused window only,
+            // so Save / New File / Toggle Terminal act on the active window.
+            // Emitted globally with an explicit target since invoking an app-menu
+            // item steals key focus, making `emit_to` filtering unreliable.
             let label = focused_window_label(app);
-            let _ = app.emit_to(label.as_str(), "menu-action", id);
+            let _ = app.emit("menu-action", serde_json::json!({ "action": id, "target": label }));
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                if let Ok(mut lf) = LAST_FOCUSED.lock() {
+                    *lf = Some(window.label().to_string());
+                }
+            }
             if let tauri::WindowEvent::Destroyed = event {
                 let label = window.label().to_string();
                 window.state::<AppState>().remove_window(&label);

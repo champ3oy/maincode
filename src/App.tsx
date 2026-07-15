@@ -463,10 +463,12 @@ function App() {
   const menuActionRef = useRef(onMenuAction);
   menuActionRef.current = onMenuAction;
   useEffect(() => {
+    const myLabel = getCurrentWindow().label;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
-    listen<string>("menu-action", (e) => {
-      void menuActionRef.current(e.payload);
+    listen<{ action: string; target: string }>("menu-action", (e) => {
+      if (e.payload.target !== myLabel) return; // not addressed to this window
+      void menuActionRef.current(e.payload.action);
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
