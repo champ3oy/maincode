@@ -17,7 +17,6 @@ export interface AiCli {
 // Brand-colored badge fallback for CLIs whose official mark we don't yet have.
 // Keyed by the Rust `id`.
 const AI_ICONS: Record<string, { bg: string; glyph: string }> = {
-  aider: { bg: "#14b8a6", glyph: "ai" },
   agy: { bg: "#1a73e8", glyph: "▲" },
 };
 
@@ -96,6 +95,26 @@ function AiCliIcon({ id }: { id: string }) {
           strokeLinejoin="round"
         />
         <rect x="12.4" y="13.7" width="4.4" height="1.5" rx="0.75" fill="#fff" />
+      </svg>
+    );
+  }
+  if (id === "aider") {
+    // Aider — black "a" on a light tile (approximates the brand mark).
+    return (
+      <svg viewBox="0 0 24 24" className="size-4 shrink-0" aria-hidden>
+        <rect width="24" height="24" rx="4" fill="#fafafa" />
+        <text
+          x="12"
+          y="18"
+          textAnchor="middle"
+          fontFamily="Georgia, 'Times New Roman', serif"
+          fontSize="17"
+          fontStyle="italic"
+          fontWeight="700"
+          fill="#0a0a0a"
+        >
+          a
+        </text>
       </svg>
     );
   }
