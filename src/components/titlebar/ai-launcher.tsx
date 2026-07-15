@@ -99,12 +99,13 @@ function AiCliIcon({ id }: { id: string }) {
     );
   }
   if (id === "cursor") {
-    // Cursor — faceted cube (from-memory recreation; verify against the mark).
+    // Cursor — faceted cube: bright top facet, darker sides.
     return (
       <svg viewBox="0 0 24 24" className="size-4 shrink-0" aria-hidden>
-        <polygon points="12,2.5 21,7.75 12,13 3,7.75" fill="#e5e7eb" />
-        <polygon points="3,7.75 12,13 12,21.5 3,16.25" fill="#9ca3af" />
-        <polygon points="21,7.75 12,13 12,21.5 21,16.25" fill="#6b7280" />
+        <polygon points="12,2.5 3.5,7.5 20.5,7.5" fill="#c9c9c9" />
+        <polygon points="3.5,7.5 20.5,7.5 12,12" fill="#f7f7f7" />
+        <polygon points="3.5,7.5 12,12 12,21.5 3.5,16.5" fill="#585858" />
+        <polygon points="20.5,7.5 12,12 12,21.5 20.5,16.5" fill="#323232" />
       </svg>
     );
   }
