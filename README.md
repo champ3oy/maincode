@@ -7,7 +7,7 @@ derived from [cub.dev](https://github.com/ephraimduncan/cub.dev).
 
 Download [Latest Release](https://code.cirlorm.dev)
 
-![Maincode](docs/screenshot.png)
+![Maincode](docs/screenshot.gif)
 
 ## Features
 
