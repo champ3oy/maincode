@@ -56,7 +56,10 @@ import {
   CommandCenter,
   type PaletteCommand,
 } from "@/components/command-center/command-center";
-import { TerminalDock } from "@/components/terminal/terminal-dock";
+import {
+  TerminalDock,
+  type TerminalDockHandle,
+} from "@/components/terminal/terminal-dock";
 import { setProjectRoot, warmServer } from "@/lib/intelligence";
 import { invoke } from "@tauri-apps/api/core";
 import type { DefinitionResult } from "@/lib/ts-worker/protocol";
@@ -142,6 +145,7 @@ function App() {
   const [gitPending, setGitPending] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
   const restoreStartedRef = useRef(false);
+  const terminalDockRef = useRef<TerminalDockHandle | null>(null);
 
   // Source control panel state
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("files");
@@ -944,6 +948,7 @@ function App() {
                   >
                     <TerminalDock
                       key={rootPath ?? "no-project"}
+                      ref={terminalDockRef}
                       cwd={rootPath}
                       position={terminalPosition}
                       onTogglePosition={toggleTerminalPosition}
