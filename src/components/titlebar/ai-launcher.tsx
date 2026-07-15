@@ -17,6 +17,7 @@ export interface AiCli {
 // Brand-colored badge fallback for CLIs whose official mark we don't yet have.
 // Keyed by the Rust `id`.
 const AI_ICONS: Record<string, { bg: string; glyph: string }> = {
+  cursor: { bg: "#0a0a0a", glyph: "❯" },
   agy: { bg: "#1a73e8", glyph: "▲" },
 };
 

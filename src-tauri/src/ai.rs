@@ -13,6 +13,7 @@ const CANDIDATES: &[(&str, &str, &str)] = &[
     ("gemini", "Gemini CLI", "gemini"),
     ("aider", "Aider", "aider"),
     ("codex", "Codex", "codex"),
+    ("cursor", "Cursor CLI", "agent"),
     ("agy", "Antigravity", "agy"),
 ];
 
