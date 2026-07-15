@@ -1,3 +1,4 @@
+mod ai;
 mod git;
 mod menu;
 mod watcher;
@@ -128,6 +129,7 @@ pub fn run() {
             settings::read_settings,
             settings::write_settings,
             settings::settings_path,
+            ai::list_ai_clis,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

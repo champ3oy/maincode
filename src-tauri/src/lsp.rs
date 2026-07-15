@@ -154,7 +154,7 @@ fn resolve_command(app: &AppHandle, server_id: &str) -> Result<(std::path::PathB
 /// times (ensure + rustup lookups + child env), so caching removes repeated
 /// heavy shell spawns — some of which ran on the UI thread during spawn.
 static LOGIN_PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-fn login_path() -> Option<String> {
+pub fn login_path() -> Option<String> {
     LOGIN_PATH
         .get_or_init(|| {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
