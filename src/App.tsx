@@ -768,6 +768,13 @@ function App() {
           onSelectTab={setSidebarTab}
           showTerminal={showTerminal}
           onToggleTerminal={toggleTerminal}
+          onLaunchAiCli={(cli) => {
+            setShowTerminal(true);
+            terminalDockRef.current?.openTerminalWithCommand(
+              cli.bin,
+              cli.label,
+            );
+          }}
         />
         <ResizablePanelGroup
           orientation="horizontal"

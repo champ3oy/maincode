@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { IconFiles, IconGitBranch, IconTerminal2 } from "@tabler/icons-react";
 import { cn } from "@/lib/utils";
+import { AiLauncher, type AiCli } from "./ai-launcher";
 
 export type SidebarTab = "files" | "changes";
 
@@ -11,6 +12,7 @@ interface TitleBarProps {
   onSelectTab: (tab: SidebarTab) => void;
   showTerminal: boolean;
   onToggleTerminal: () => void;
+  onLaunchAiCli: (cli: AiCli) => void;
 }
 
 // A custom overlay title bar. The window uses `titleBarStyle: "Overlay"` so the
@@ -23,6 +25,7 @@ export function TitleBar({
   onSelectTab,
   showTerminal,
   onToggleTerminal,
+  onLaunchAiCli,
 }: TitleBarProps) {
   return (
     <div
@@ -54,6 +57,7 @@ export function TitleBar({
         >
           <IconTerminal2 className="size-4" stroke={1.75} />
         </TabButton>
+        <AiLauncher onLaunch={onLaunchAiCli} />
       </div>
     </div>
   );
