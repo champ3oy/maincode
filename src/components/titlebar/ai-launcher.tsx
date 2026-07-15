@@ -17,7 +17,6 @@ export interface AiCli {
 // Brand-colored badge fallback for CLIs whose official mark we don't yet have.
 // Keyed by the Rust `id`.
 const AI_ICONS: Record<string, { bg: string; glyph: string }> = {
-  cursor: { bg: "#0a0a0a", glyph: "❯" },
   agy: { bg: "#1a73e8", glyph: "▲" },
 };
 
@@ -96,6 +95,16 @@ function AiCliIcon({ id }: { id: string }) {
           strokeLinejoin="round"
         />
         <rect x="12.4" y="13.7" width="4.4" height="1.5" rx="0.75" fill="#fff" />
+      </svg>
+    );
+  }
+  if (id === "cursor") {
+    // Cursor — faceted cube (from-memory recreation; verify against the mark).
+    return (
+      <svg viewBox="0 0 24 24" className="size-4 shrink-0" aria-hidden>
+        <polygon points="12,2.5 21,7.75 12,13 3,7.75" fill="#e5e7eb" />
+        <polygon points="3,7.75 12,13 12,21.5 3,16.25" fill="#9ca3af" />
+        <polygon points="21,7.75 12,13 12,21.5 21,16.25" fill="#6b7280" />
       </svg>
     );
   }
