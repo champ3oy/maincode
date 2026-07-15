@@ -2,22 +2,30 @@
 
 Releases are built and uploaded manually.
 
-0. **One-time, before the first updater-enabled release:** generate the
-   updater keypair:
-   ```
-   npm run tauri signer generate -- -w ~/.tauri/maincode.key
-   ```
-   Store the private key file and its password securely (password manager).
-   Then replace the placeholder `plugins.updater.pubkey` value
-   (`"REPLACE_WITH_UPDATER_PUBLIC_KEY_BEFORE_RELEASE"`) in
-   `src-tauri/tauri.conf.json` with the public key printed by the command
-   above. **Auto-update will not work until this placeholder is replaced.**
+## Updater signing key (already set up)
+
+The updater keypair was generated with:
+```
+npm run tauri signer generate -- --ci -w ~/.tauri/maincode.key
+```
+- **Private key:** `~/.tauri/maincode.key` — **no password**, kept OUTSIDE the
+  repo. **Back it up** (password manager / secure store). If it's lost, future
+  updates can't be signed and you'd have to ship a new pubkey (another manual
+  install for everyone).
+- **Public key:** committed to `plugins.updater.pubkey` in
+  `src-tauri/tauri.conf.json`. Do not change it without regenerating the pair.
+
+To rotate (e.g. to add a password), re-run the command above (add `-p <pw>`),
+paste the new public key into `tauri.conf.json`, and update the export below.
+
+## Cutting a release
+
 1. Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and `package.json`.
 2. Move the `CHANGELOG.md` **Unreleased** entries under the new version heading + date.
-3. Build with the updater signing key (kept in your password manager):
+3. Build with the updater signing key:
    ```
    export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/maincode.key)"
-   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="…"
+   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # no password on this key
    npm run tauri build
    ```
    This produces the `.dmg`, the `.app.tar.gz`, and its `.sig` (from `createUpdaterArtifacts`).
