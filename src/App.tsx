@@ -67,6 +67,7 @@ function App() {
   const {
     openFile,
     closeTab,
+    closeAllTabs,
     handlePathRenamed,
     activeTab,
     saveFile,
@@ -90,6 +91,16 @@ function App() {
   useEffect(() => {
     setFormatRoot(rootPath);
   }, [rootPath, setFormatRoot]);
+
+  // Opening a different project must not carry the previous project's tabs.
+  // Skip the initial mount (nothing to clear) and same-path re-selection.
+  const prevRootRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevRootRef.current !== null && prevRootRef.current !== rootPath) {
+      closeAllTabs();
+    }
+    prevRootRef.current = rootPath;
+  }, [rootPath, closeAllTabs]);
 
   // Set (or clear) the project root on the client manager so per-language LSP
   // clients are lazily created/opened as files route to them. When the project
@@ -930,6 +941,7 @@ function App() {
                     }
                   >
                     <TerminalDock
+                      key={rootPath ?? "no-project"}
                       cwd={rootPath}
                       position={terminalPosition}
                       onTogglePosition={toggleTerminalPosition}
